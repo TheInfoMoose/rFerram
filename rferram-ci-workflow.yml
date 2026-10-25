@@ -1,0 +1,106 @@
+name: rFerram Continuous Integration
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+  schedule:
+    # Run security & dependency audit weekly (Mondays at 04:00 UTC)
+    - cron: '0 4 * * 1'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. SECURITY & DEPENDENCY AUDIT
+  # ---------------------------------------------------------------------------
+  security-audit:
+    name: Security & Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Stable Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache Setup
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Cargo Audit (NIST & RustSec CVE Verification)
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked || true
+
+      - name: Check Dependencies & Licensing (cargo-deny)
+        run: cargo deny check advisories licenses bans sources
+
+  # ---------------------------------------------------------------------------
+  # 2. CODE QUALITY & FORMATTING
+  # ---------------------------------------------------------------------------
+  lint-and-fmt:
+    name: Code Quality & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Rust Toolchain with Clippy and Rustfmt
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache Setup
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy Linter
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # 3. CROSS-PLATFORM COMPILATION & UNIT TESTING MATRIX
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: Test (${{ matrix.os }})
+    needs: [security-audit, lint-and-fmt]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies (Wayland, PipeWire, Alsa)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libwayland-dev \
+            libpipewire-0.3-dev \
+            libclang-dev \
+            libdbus-1-dev \
+            libasound2-dev
+
+      - name: Install Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache Setup
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify Workspace Cargo.lock Reproducibility
+        run: cargo check --workspace --locked
+
+      - name: Execute Workspace Unit Tests
+        run: cargo test --workspace --all-targets --locked -- --nocapture

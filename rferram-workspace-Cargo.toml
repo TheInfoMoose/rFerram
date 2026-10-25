@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/rferram-common",
+    "crates/rferram-protocol",
+    "crates/rferram-net",
+    "crates/rferram-channels",
+    "crates/rferram-client",
+    "crates/rferram-server",
+    "crates/rferram-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["TheInfoMoose"]
+license = "GPL-3.0-only"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Internal Workspace Crates
+rferram-common = { path = "crates/rferram-common", version = "0.1.0" }
+rferram-protocol = { path = "crates/rferram-protocol", version = "0.1.0" }
+rferram-net = { path = "crates/rferram-net", version = "0.1.0" }
+rferram-channels = { path = "crates/rferram-channels", version = "0.1.0" }
+rferram-client = { path = "crates/rferram-client", version = "0.1.0" }
+rferram-server = { path = "crates/rferram-server", version = "0.1.0" }
+
+# Simply Transfer v2 Integration
+simply-transfer-core = { git = "https://github.com/TheInfoMoose/ST_Rust_Age" }
+simply-transfer-crypto = { git = "https://github.com/TheInfoMoose/ST_Rust_Age" }
+simply-transfer-snapshots = { git = "https://github.com/TheInfoMoose/ST_Rust_Age" }
+
+# Graphical UI & Rendering Engine (Linux, macOS, Windows)
+libcosmic = { git = "https://github.com/pop-os/libcosmic", branch = "main", features = ["tokio", "wgpu"] }
+cosmic-config = { git = "https://github.com/pop-os/libcosmic", branch = "main" }
+iced = { version = "0.13", default-features = false, features = ["wgpu", "tokio"] }
+wgpu = "22.0"
+glow = "0.14"
+
+# Host Display & Frame Capture Backends
+smithay = { version = "0.3", features = ["backend_winit", "backend_drm", "backend_gbm", "wayland_frontend"] }
+pipewire = "0.8"
+windows-capture = "1.3"
+screencapturekit = "0.2"
+
+# macOS Specific Framework Bindings
+core-graphics = "0.23"
+core-foundation = "0.10"
+metal = "0.29"
+
+# Network, Transport & Security
+quinn = { version = "0.11", default-features = false, features = ["rustls", "ring", "runtime-tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+socket2 = { version = "0.5", features = ["all"] }
+russh = "0.45"
+
+# OS Integration, Clipboard, Audio & Credentials
+arboard = "3.4"
+cpal = "0.15"
+keyring = "3.0"
+
+# Async Core, Serialization & Utilities
+tokio = { version = "1.40", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Structured Logging & Diagnostics
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
