@@ -1,0 +1,47 @@
+# cargo-deny configuration for rFerram
+# Enforces zero RustSec advisories, zero unmaintained crates, and strict license hygiene.
+
+[advisories]
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+unmaintained = "workspace"
+unsound = "all"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "GPL-3.0-only",
+    "GPL-3.0-or-later",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+deny = [
+    # Forbid unmaintained bincode 1.x (RUSTSEC-2025-0141); workspace uses postcard 1.1.3
+    { name = "bincode", version = "<2.0.0" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/TheInfoMoose/ST_Rust_Age",
+    "https://github.com/pop-os/libcosmic",
+]

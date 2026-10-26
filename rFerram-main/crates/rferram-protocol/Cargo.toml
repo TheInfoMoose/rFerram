@@ -1,0 +1,14 @@
+[package]
+name = "rferram-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Zero-copy binary wire envelope and postcard serialization frames for rFerram"
+
+[dependencies]
+postcard = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

@@ -1,0 +1,20 @@
+[package]
+name = "rferram-client"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Remote viewer session pipeline engine, wgpu presenter, and latency feedback control loop for rFerram"
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+rferram-channels = { workspace = true }
+rferram-common = { workspace = true }
+rferram-net = { workspace = true }
+rferram-protocol = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+wgpu = { workspace = true }

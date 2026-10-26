@@ -1,0 +1,33 @@
+[package]
+name = "libcosmic"
+version = "1.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[lib]
+name = "cosmic"
+
+[features]
+default = ["tokio", "wgpu", "winit", "multi-window", "wayland", "x11", "dbus-config"]
+tokio = ["dep:tokio"]
+wgpu = ["dep:wgpu"]
+winit = ["dep:winit"]
+multi-window = []
+wayland = []
+x11 = []
+dbus-config = []
+a11y = []
+
+[dependencies]
+cosmic-config = { path = "cosmic-config" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+taffy = "0.10.1"
+tiny-skia = "0.12.0"
+tokio = { version = "1.53.3", features = ["rt", "sync", "time", "macros"], optional = true }
+tracing = "0.1.44"
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "dx12", "wgsl"], optional = true }
+winit = { version = "0.30.13", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }

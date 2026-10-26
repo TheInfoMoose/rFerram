@@ -1,0 +1,23 @@
+[package]
+name = "rferram-common"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Shared domain models, OS environment detection, and NIST-compliant credential vault for rFerram"
+
+[dependencies]
+ed25519-dalek = { workspace = true }
+hex = { workspace = true }
+keyring = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+simply-transfer-crypto = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+zeroize = { workspace = true }

@@ -1,0 +1,28 @@
+[package]
+name = "rferram-ui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "COSMIC Desktop and cross-platform viewer GUI application for rFerram"
+
+[[bin]]
+name = "rferram-ui"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+cosmic-config = { workspace = true }
+libcosmic = { workspace = true }
+rferram-channels = { workspace = true }
+rferram-client = { workspace = true }
+rferram-common = { workspace = true }
+rferram-net = { workspace = true }
+rferram-protocol = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+wgpu = { workspace = true }

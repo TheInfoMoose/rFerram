@@ -1,0 +1,20 @@
+# Rust / Cargo Build Artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# OS & Editor Artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Local Vault & Runtime Keys
+*.pem
+*.key
+*.enc
+.rferram-vault/
+.simply-transfer/

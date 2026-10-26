@@ -1,0 +1,24 @@
+[package]
+name = "rferram-net"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "VPN-aware QUIC/UDP transport layer with socket2 adapter binding and rustls TLS 1.3 for rFerram"
+
+[dependencies]
+anyhow = { workspace = true }
+if-addrs = { workspace = true }
+libc = { workspace = true }
+quinn = { workspace = true }
+quinn-proto = { workspace = true }
+rcgen = { workspace = true }
+rferram-common = { workspace = true }
+rferram-protocol = { workspace = true }
+rustls = { workspace = true }
+sha2 = { workspace = true }
+socket2 = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

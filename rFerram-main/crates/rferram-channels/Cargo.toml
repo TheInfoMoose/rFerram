@@ -1,0 +1,23 @@
+[package]
+name = "rferram-channels"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Out-of-band virtual channels for clipboard sync (arboard) and ST_Rust_Age snapshot file transfers"
+
+[dependencies]
+anyhow = { workspace = true }
+arboard = { workspace = true }
+rferram-common = { workspace = true }
+rferram-protocol = { workspace = true }
+russh = { workspace = true }
+sha2 = { workspace = true }
+simply-transfer-core = { workspace = true }
+simply-transfer-crypto = { workspace = true }
+simply-transfer-snapshots = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
