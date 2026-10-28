@@ -11,18 +11,14 @@
 //! duplex audio loopback capture (PipeWire, WASAPI, macOS CoreAudio),
 //! and elevated daemon session orchestration (`systemd`, Windows Service, macOS `launchd`).
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-
 use anyhow::Result;
-use tokio::sync::{Mutex, mpsc};
-use tracing::{debug, error, info, warn};
 
-use rferram_common::{NistVault, RuntimeEnvironment};
-use rferram_protocol::{
-    AudioCodec, AudioDirection, AudioFrameMessage, ControlMessage, HandshakeMessage, InputEvent,
-    PixelFormat, WireMessage,
+use rferram_protocol::{InputEvent, PixelFormat};
+
+pub mod audio;
+pub use audio::{
+    HostAudioCapturer, OPUS_CHANNELS, OPUS_FRAME_INTERVAL_MS, OPUS_PAYLOAD_BYTES,
+    OPUS_SAMPLE_RATE_HZ,
 };
 
 pub mod backends;
@@ -57,6 +53,10 @@ pub use backends::{
     translate_input_event_to_win32, translate_key_to_evdev_scancode,
     translate_modifiers_to_cg_flags,
 };
+
+pub mod daemon;
+pub use daemon::{ED25519_AUTH_HEADER_BYTES, HostSessionEngine, RFerramHostDaemon};
+
 pub mod encoder;
 pub use encoder::{EncoderConfig, MacOsVideoToolboxEncoder, SoftwareVideoEncoder, VideoEncoder};
 
@@ -150,261 +150,17 @@ impl HostInputInjector for NativeInputInjector {
     }
 }
 
-/// Host System Audio Capture Loopback Engine (PipeWire / WASAPI / macOS CoreAudio)
-pub struct HostAudioCapturer {
-    pub backend: CaptureBackendType,
-    pub is_running: Arc<AtomicBool>,
-}
-
-impl HostAudioCapturer {
-    pub fn new(backend: CaptureBackendType) -> Self {
-        Self {
-            backend,
-            is_running: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub async fn start_loopback_capture(&self, tx: mpsc::Sender<WireMessage>) -> Result<()> {
-        self.is_running.store(true, Ordering::SeqCst);
-        let is_running = self.is_running.clone();
-        let backend = self.backend;
-
-        tokio::spawn(async move {
-            let mut stream_id: u32 = 1;
-            let interval = Duration::from_millis(20); // 50 Hz Opus frame chunking
-
-            info!(?backend, "Started host audio loopback capture task");
-
-            while is_running.load(Ordering::SeqCst) {
-                tokio::time::sleep(interval).await;
-
-                let audio_msg = AudioFrameMessage {
-                    stream_id,
-                    timestamp_us: Instant::now().elapsed().as_micros() as u64,
-                    direction: AudioDirection::HostToClientSpeaker,
-                    codec: AudioCodec::Opus,
-                    channels: 2,
-                    sample_rate: 48000,
-                    payload: vec![0u8; 192],
-                };
-
-                if tx.send(WireMessage::Audio(audio_msg)).await.is_err() {
-                    break;
-                }
-                stream_id += 1;
-            }
-        });
-
-        Ok(())
-    }
-
-    pub fn stop(&self) {
-        self.is_running.store(false, Ordering::SeqCst);
-    }
-}
-
-/// Active Session Controller on Host Daemon
-pub struct HostSessionEngine {
-    pub session_id: String,
-    pub backend_type: CaptureBackendType,
-    pub encoder: Arc<Mutex<Box<dyn VideoEncoder>>>,
-    pub input_injector: Arc<dyn HostInputInjector>,
-    pub audio_capturer: HostAudioCapturer,
-    pub force_keyframe_flag: Arc<AtomicBool>,
-    pub is_active: Arc<AtomicBool>,
-}
-
-impl HostSessionEngine {
-    pub fn new(
-        session_id: String,
-        backend_type: CaptureBackendType,
-        encoder_config: EncoderConfig,
-    ) -> Self {
-        let encoder: Box<dyn VideoEncoder> = match backend_type {
-            CaptureBackendType::MacOsScreenCaptureKit => {
-                Box::new(MacOsVideoToolboxEncoder::new(encoder_config))
-            }
-            _ => Box::new(SoftwareVideoEncoder::new(encoder_config)),
-        };
-
-        let input_injector = Arc::new(NativeInputInjector::new(backend_type));
-
-        Self {
-            session_id,
-            backend_type,
-            encoder: Arc::new(Mutex::new(encoder)),
-            input_injector,
-            audio_capturer: HostAudioCapturer::new(backend_type),
-            force_keyframe_flag: Arc::new(AtomicBool::new(true)),
-            is_active: Arc::new(AtomicBool::new(true)),
-        }
-    }
-
-    /// Spawns the main GPU frame capture loop
-    pub async fn run_capture_loop(&self, outgoing_tx: mpsc::Sender<WireMessage>) -> Result<()> {
-        info!(
-            session_id = %self.session_id,
-            backend = ?self.backend_type,
-            "Starting host frame capture loop"
-        );
-
-        let is_active = self.is_active.clone();
-        let encoder = self.encoder.clone();
-        let force_keyframe = self.force_keyframe_flag.clone();
-        let video_tx = outgoing_tx.clone();
-        let start_time = Instant::now();
-        let mut frame_count: u64 = 0;
-
-        tokio::spawn(async move {
-            let target_frame_duration = Duration::from_nanos(1_000_000_000 / 60);
-
-            while is_active.load(Ordering::Relaxed) {
-                let loop_start = Instant::now();
-                frame_count += 1;
-
-                let captured_frame = CapturedFrame {
-                    frame_index: frame_count,
-                    timestamp_us: start_time.elapsed().as_micros() as u64,
-                    display_id: 1,
-                    width: 2560,
-                    height: 1440,
-                    stride: 2560 * 4,
-                    pixel_format: PixelFormat::Bgra8,
-                    data: vec![128u8; 2560 * 1440 * 4],
-                    is_dmabuf_or_metal_handle: true,
-                };
-
-                let need_keyframe = force_keyframe.swap(false, Ordering::SeqCst);
-
-                let mut enc_lock = encoder.lock().await;
-                match enc_lock.encode(&captured_frame, need_keyframe) {
-                    Ok(video_msg) => {
-                        if video_tx.send(WireMessage::Video(video_msg)).await.is_err() {
-                            error!("Outgoing transport channel closed; exiting capture loop");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Video frame encoding failed");
-                    }
-                }
-                drop(enc_lock);
-
-                let elapsed = loop_start.elapsed();
-                if elapsed < target_frame_duration {
-                    tokio::time::sleep(target_frame_duration - elapsed).await;
-                }
-            }
-        });
-
-        self.audio_capturer
-            .start_loopback_capture(outgoing_tx)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Handle incoming wire messages from remote client
-    pub async fn handle_incoming_wire_message(&self, msg: WireMessage) -> Result<()> {
-        match msg {
-            WireMessage::Input(input_event) => {
-                self.input_injector.inject_input(&input_event)?;
-            }
-            WireMessage::Control(ctrl) => match ctrl {
-                ControlMessage::LossReport { missing_frames } => {
-                    warn!(
-                        ?missing_frames,
-                        "Client reported packet loss; triggering instant keyframe"
-                    );
-                    self.force_keyframe_flag.store(true, Ordering::SeqCst);
-                }
-                ControlMessage::BandwidthEstimate {
-                    bytes_per_sec,
-                    rtt_ms,
-                    ..
-                } => {
-                    let bitrate_kbps = (bytes_per_sec * 8 / 1000) as u32;
-                    debug!(
-                        bitrate_kbps,
-                        rtt_ms, "Updating encoder bitrate from network feedback"
-                    );
-                    let mut enc = self.encoder.lock().await;
-                    let _ = enc.update_bitrate(bitrate_kbps);
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        Ok(())
-    }
-
-    pub fn stop(&self) {
-        self.is_active.store(false, Ordering::SeqCst);
-        self.audio_capturer.stop();
-        info!(session_id = %self.session_id, "Host session stopped");
-    }
-}
-
-/// Elevated Host Daemon Service Background Manager (systemd, Windows Service, macOS launchd)
-pub struct RFerramHostDaemon {
-    pub host_name: String,
-    pub backend: CaptureBackendType,
-    pub runtime_env: RuntimeEnvironment,
-    pub vault: NistVault,
-    pub active_sessions: Arc<Mutex<Vec<Arc<HostSessionEngine>>>>,
-}
-
-impl RFerramHostDaemon {
-    pub fn new(host_name: String, backend: CaptureBackendType) -> Self {
-        let runtime_env = RuntimeEnvironment::detect();
-        info!(
-            host_name = %host_name,
-            backend = ?backend,
-            platform = ?runtime_env.platform,
-            is_cosmic = runtime_env.is_cosmic_desktop,
-            "Initializing elevated rFerram Host Daemon Service"
-        );
-        Self {
-            host_name,
-            backend,
-            runtime_env,
-            vault: NistVault::default(),
-            active_sessions: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    /// Auto-detects operating system backend (Wayland/COSMIC, X11 fallback, DXGI, or ScreenCaptureKit)
-    pub fn auto_detect_backend() -> CaptureBackendType {
-        if cfg!(target_os = "macos") {
-            CaptureBackendType::MacOsScreenCaptureKit
-        } else if cfg!(target_os = "windows") {
-            CaptureBackendType::WindowsDxgi
-        } else {
-            let env = RuntimeEnvironment::detect();
-            if env.is_wayland || env.is_cosmic_desktop {
-                CaptureBackendType::WaylandPipeWire
-            } else if std::env::var("DISPLAY").is_ok() {
-                CaptureBackendType::X11Fallback
-            } else {
-                CaptureBackendType::WaylandPipeWire
-            }
-        }
-    }
-
-    /// Authenticates client connection request and provisions session
-    pub async fn handle_handshake(&self, handshake: HandshakeMessage) -> Result<String> {
-        info!(
-            client_hello = ?handshake,
-            "Processing incoming client connection handshake"
-        );
-
-        Ok(uuid::Uuid::new_v4().to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
+    use tokio::sync::mpsc;
+
+    use rferram_common::{NistVault, VaultTokenModel};
+    use rferram_protocol::{
+        AudioCodec, AudioDirection, AuthMethod, ControlMessage, HandshakeMessage, VideoCodec,
+        WireMessage,
+    };
 
     #[tokio::test]
     async fn test_forced_keyframe_on_packet_loss() {
@@ -458,5 +214,198 @@ mod tests {
             .await
             .unwrap();
         assert!(session.force_keyframe_flag.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_handshake_challenge_and_vault_token_verification() {
+        let vault = NistVault::new("test.rferram.server.handshake");
+        let daemon = RFerramHostDaemon::with_vault(
+            "test-host-daemon".to_string(),
+            CaptureBackendType::WaylandPipeWire,
+            vault,
+        );
+
+        // 1. Valid ClientHello negotiation returns a session UUID
+        let hello = HandshakeMessage::ClientHello {
+            protocol_version: 1,
+            client_id: "viewer-client-01".to_string(),
+            client_name: "COSMIC Viewer".to_string(),
+            supported_codecs: vec![VideoCodec::AV1, VideoCodec::H265],
+            auth_methods: vec![AuthMethod::Ed25519Signature, AuthMethod::VaultToken],
+        };
+        let hello_session_id = daemon
+            .handle_handshake(hello)
+            .await
+            .expect("Valid ClientHello should succeed");
+        assert!(!hello_session_id.is_empty());
+
+        // Reject ClientHello with protocol_version 0
+        let bad_hello = HandshakeMessage::ClientHello {
+            protocol_version: 0,
+            client_id: "viewer-client-01".to_string(),
+            client_name: "COSMIC Viewer".to_string(),
+            supported_codecs: vec![VideoCodec::AV1],
+            auth_methods: vec![AuthMethod::Ed25519Signature],
+        };
+        assert!(daemon.handle_handshake(bad_hello).await.is_err());
+
+        // 2. Ed25519 TLS 1.3 channel-bound challenge verification
+        let (signing_key, verifying_key) = daemon
+            .vault
+            .get_or_create_ed25519_identity("server_handshake_test_peer")
+            .expect("Should generate Ed25519 identity");
+        let challenge = b"rferram-server-nonce-challenge-32bytes";
+        let tls_cert_sha256 = [0x5Au8; 32];
+        let signature =
+            NistVault::sign_channel_bound_challenge(&signing_key, challenge, &tls_cert_sha256);
+
+        let auth_req = RFerramHostDaemon::build_ed25519_auth_request(
+            &verifying_key.to_bytes(),
+            &tls_cert_sha256,
+            challenge,
+            &signature,
+        );
+        let ed_session_id = daemon
+            .handle_handshake(auth_req)
+            .await
+            .expect("Valid channel-bound Ed25519 AuthRequest should succeed");
+        assert!(!ed_session_id.is_empty());
+
+        // Tampered TLS certificate fingerprint must fail MITM channel binding check
+        let wrong_cert_sha256 = [0xFFu8; 32];
+        let mitm_req = RFerramHostDaemon::build_ed25519_auth_request(
+            &verifying_key.to_bytes(),
+            &wrong_cert_sha256,
+            challenge,
+            &signature,
+        );
+        assert!(
+            daemon.handle_handshake(mitm_req).await.is_err(),
+            "Mismatched TLS certificate fingerprint must be rejected"
+        );
+
+        // Tampered signature bytes must fail verification
+        let mut bad_sig = signature.clone();
+        bad_sig[0] ^= 0xFF;
+        let bad_sig_req = RFerramHostDaemon::build_ed25519_auth_request(
+            &verifying_key.to_bytes(),
+            &tls_cert_sha256,
+            challenge,
+            &bad_sig,
+        );
+        assert!(
+            daemon.handle_handshake(bad_sig_req).await.is_err(),
+            "Tampered Ed25519 signature must be rejected"
+        );
+
+        // 3. NistVault session token authentication
+        let token_model = VaultTokenModel {
+            session_token: "nist-vault-secret-session-token-99".to_string(),
+            auth_method: "Ed25519+P2P".to_string(),
+            expires_at: 2_000_000_000,
+        };
+        daemon
+            .vault
+            .store_session_token("workstation_alpha", &token_model)
+            .expect("Should store session token in NistVault");
+
+        let valid_token_req = HandshakeMessage::AuthRequest {
+            auth_method: AuthMethod::VaultToken,
+            credentials: b"workstation_alpha:nist-vault-secret-session-token-99".to_vec(),
+        };
+        let token_session_id = daemon
+            .handle_handshake(valid_token_req)
+            .await
+            .expect("Matching NistVault token should authenticate");
+        assert!(!token_session_id.is_empty());
+
+        let invalid_token_req = HandshakeMessage::AuthRequest {
+            auth_method: AuthMethod::VaultToken,
+            credentials: b"workstation_alpha:wrong-token-value".to_vec(),
+        };
+        assert!(
+            daemon.handle_handshake(invalid_token_req).await.is_err(),
+            "Mismatched NistVault token must be rejected"
+        );
+
+        let _ = daemon.vault.delete_session_token("workstation_alpha");
+    }
+
+    #[tokio::test]
+    async fn test_daemon_session_lifecycle_and_audio_loopback() {
+        let daemon = RFerramHostDaemon::with_vault(
+            "lifecycle-host".to_string(),
+            CaptureBackendType::WaylandPipeWire,
+            NistVault::new("test.rferram.server.lifecycle"),
+        );
+        assert_eq!(daemon.active_session_count().await, 0);
+
+        let hello = HandshakeMessage::ClientHello {
+            protocol_version: 1,
+            client_id: "client-lifecycle-1".to_string(),
+            client_name: "Linux Viewer".to_string(),
+            supported_codecs: vec![VideoCodec::AV1],
+            auth_methods: vec![AuthMethod::Ed25519Signature],
+        };
+        let session_id_1 = daemon.handle_handshake(hello).await.unwrap();
+        let session_1 = daemon
+            .provision_session(session_id_1.clone(), EncoderConfig::default())
+            .await;
+        let session_2 = daemon
+            .provision_session("session-2".to_string(), EncoderConfig::default())
+            .await;
+
+        assert_eq!(daemon.active_session_count().await, 2);
+        assert!(session_1.is_running());
+        assert!(session_2.is_running());
+        assert!(daemon.get_session(&session_id_1).await.is_some());
+
+        // Start capture + 20ms Opus audio loopback on session_1 and verify emitted frames
+        let (wire_tx, mut wire_rx) = mpsc::channel(32);
+        session_1.run_capture_loop(wire_tx).await.unwrap();
+        assert!(session_1.audio_capturer.is_capturing());
+
+        let mut saw_video = false;
+        let mut saw_audio = false;
+        for _ in 0..10 {
+            if let Some(msg) = wire_rx.recv().await {
+                match msg {
+                    WireMessage::Video(v) => {
+                        assert_eq!(v.width, 2560);
+                        assert_eq!(v.height, 1440);
+                        saw_video = true;
+                    }
+                    WireMessage::Audio(a) => {
+                        assert_eq!(a.codec, AudioCodec::Opus);
+                        assert_eq!(a.direction, AudioDirection::HostToClientSpeaker);
+                        assert_eq!(a.channels, OPUS_CHANNELS);
+                        assert_eq!(a.sample_rate, OPUS_SAMPLE_RATE_HZ);
+                        assert_eq!(a.payload.len(), OPUS_PAYLOAD_BYTES);
+                        saw_audio = true;
+                    }
+                    _ => {}
+                }
+                if saw_video && saw_audio {
+                    break;
+                }
+            }
+        }
+        assert!(saw_video, "Capture loop should emit VideoFrameMessage");
+        assert!(
+            saw_audio,
+            "Audio loopback should emit 20ms Opus AudioFrameMessage"
+        );
+
+        // Terminate session_1 and verify it stops and is removed from active_sessions
+        assert!(daemon.terminate_session(&session_id_1).await);
+        assert!(!session_1.is_running());
+        assert!(!session_1.audio_capturer.is_capturing());
+        assert_eq!(daemon.active_session_count().await, 1);
+        assert!(!daemon.terminate_session("non-existent-session").await);
+
+        // Shutdown all remaining sessions
+        daemon.shutdown_all_sessions().await;
+        assert!(!session_2.is_running());
+        assert_eq!(daemon.active_session_count().await, 0);
     }
 }
