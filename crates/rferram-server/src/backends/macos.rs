@@ -277,12 +277,12 @@ impl MacOsScreenCaptureKitCapturer {
         {
             // Touch the locked objc2 ecosystem crates so linkage and types are verified on macOS.
             use objc2::runtime::AnyClass;
+            use objc2_io_surface as _;
             let _ = core::any::type_name::<objc2_core_foundation::CFType>();
             let _ = core::any::type_name::<objc2_foundation::NSObject>();
             let _ = core::any::type_name::<objc2_core_graphics::CGDirectDisplayID>();
-            let _ = core::any::type_name::<objc2_io_surface::IOSurfaceRef>();
-            let _ = core::any::type_name::<objc2_metal::MTLCreateSystemDefaultDevice>();
-            let _ = core::any::type_name::<objc2_quartz_core::CATransform3D>();
+            let _ = core::any::type_name::<objc2_metal::MTLPixelFormat>();
+            let _ = core::any::type_name::<objc2_quartz_core::CAMetalLayer>();
 
             #[link(name = "CoreGraphics", kind = "framework")]
             unsafe extern "C" {
