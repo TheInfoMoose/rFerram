@@ -124,3 +124,9 @@ jobs:
 
       - name: Execute Workspace Unit & Integration Tests
         run: cargo test --workspace --all-targets --locked -- --nocapture
+
+      - name: Execute Host Daemon Smoke Test
+        env:
+          RFERRAM_SMOKE_TEST: "1"
+          RFERRAM_BIND_ADDR: "127.0.0.1:0"
+        run: cargo run -p rferram-server --locked
