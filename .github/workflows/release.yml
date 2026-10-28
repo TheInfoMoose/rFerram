@@ -111,10 +111,10 @@ jobs:
             target: x86_64-pc-windows-msvc
             platform: windows
             native_exec: true
-          - os: windows-latest
+          - os: windows-11-arm
             target: aarch64-pc-windows-msvc
             platform: windows
-            native_exec: false
+            native_exec: true
 
     steps:
       - name: Checkout Source Code
@@ -161,10 +161,27 @@ jobs:
         with:
           shared-key: "release-${{ matrix.target }}"
 
+      - name: Ensure LLVM clang-cl is in PATH (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command clang-cl -ErrorAction SilentlyContinue)) {
+            $Candidates = @(
+              "C:\Program Files\LLVM\bin",
+              "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\ARM64\bin",
+              "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\Llvm\x64\bin"
+            )
+            foreach ($Dir in $Candidates) {
+              if (Test-Path (Join-Path $Dir "clang-cl.exe")) {
+                Write-Host "==> Adding $Dir to GITHUB_PATH"
+                Add-Content -Path $env:GITHUB_PATH -Value $Dir
+                break
+              }
+            }
+          }
+
       - name: Build LTO Optimized Release Binaries
         shell: bash
-        env:
-          AWS_LC_SYS_NO_ASM: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '1' || '0' }}
         run: |
           cargo build --workspace --release --locked --target "${{ matrix.target }}"
 
