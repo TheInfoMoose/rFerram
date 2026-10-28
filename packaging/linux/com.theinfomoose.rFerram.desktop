@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=rFerram
+GenericName=Remote Desktop Viewer
+Comment=Zero-copy QUIC remote display viewer for COSMIC and modern desktops
+Exec=rferram-ui
+Icon=com.theinfomoose.rFerram
+Terminal=false
+Type=Application
+Categories=Network;RemoteAccess;System;
+Keywords=remote;desktop;quic;wayland;cosmic;rdp;vnc;
+StartupNotify=true
+StartupWMClass=com.theinfomoose.rFerram

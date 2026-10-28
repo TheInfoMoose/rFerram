@@ -1,0 +1,52 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="rFerram"
+    Manufacturer="TheInfoMoose"
+    Version="$(var.Version)"
+    UpgradeCode="8D83E4C2-7122-4B08-9415-B47A928C63D1"
+    Scope="perMachine">
+
+    <SummaryInformation
+      Description="rFerram Zero-Copy QUIC Remote Display Viewer and Host Daemon"
+      Manufacturer="TheInfoMoose" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="rFerram" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="rFerram" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="ViewerExecutable" Guid="914F7A11-3E28-4A95-A93D-1C5E9F8B3D01">
+        <File Id="RFerramUiExe" Source="$(var.BinDir)\rferram-ui.exe" KeyPath="yes">
+          <Shortcut
+            Id="ApplicationStartMenuShortcut"
+            Directory="ApplicationProgramsFolder"
+            Name="rFerram"
+            Description="Zero-copy QUIC Remote Display Viewer"
+            WorkingDirectory="INSTALLFOLDER"
+            Advertise="no" />
+        </File>
+        <RemoveFolder Id="CleanUpShortCut" Directory="ApplicationProgramsFolder" On="uninstall" />
+      </Component>
+
+      <Component Id="ServerExecutable" Guid="B52E6C18-5F41-4E2A-9B0D-7A1E8C4D2F02">
+        <File Id="RFerramServerExe" Source="$(var.BinDir)\rferram-server.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="DocumentationFiles" Guid="C83D4E29-6A12-4F5B-8C1E-9D2F7B3A4E03">
+        <File Id="ReadmeMd" Source="$(var.RootDir)\README.md" KeyPath="yes" />
+        <File Id="LicenseTxt" Source="$(var.RootDir)\LICENSE" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="ProductFeature" Title="rFerram Remote Display Suite" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+  </Package>
+</Wix>

@@ -1,5 +1,7 @@
-# Rust / Cargo Build Artifacts
+# Rust / Cargo Build & Release Packaging Artifacts
 /target/
+/dist/
+/release-assets/
 **/*.rs.bk
 *.pdb
 

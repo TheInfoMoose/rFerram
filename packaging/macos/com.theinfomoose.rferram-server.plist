@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.theinfomoose.rferram-server</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Applications/rFerram.app/Contents/MacOS/rferram-server</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RFERRAM_BIND_ADDR</key>
+        <string>0.0.0.0:4433</string>
+    </dict>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

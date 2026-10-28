@@ -1,0 +1,265 @@
+name: rFerram Release Build & Packaging
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version identifier (e.g. 0.1.0-rc1)"
+        required: false
+        default: "0.1.0-rc1"
+        type: string
+      prerelease:
+        description: "Mark GitHub Release as a pre-release"
+        required: false
+        default: true
+        type: boolean
+      draft:
+        description: "Create GitHub Release as a draft"
+        required: false
+        default: true
+        type: boolean
+      publish_github_release:
+        description: "Publish a GitHub Release on manual workflow_dispatch run"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. PRE-RELEASE QUALITY, LINT & NIST SECURITY GATE
+  # ---------------------------------------------------------------------------
+  pre-release-gate:
+    name: Pre-Release Quality & Security Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install Linux System Headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libwayland-dev \
+            libdrm-dev \
+            libgbm-dev \
+            libinput-dev \
+            libseat-dev \
+            libudev-dev \
+            libxkbcommon-dev \
+            libdbus-1-dev
+
+      - name: Install Stable Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache Setup
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit & cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: Verify Formatting (Edition 2024)
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy Linter
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run Cargo Audit (NIST & RustSec CVE Verification)
+        run: cargo audit --deny warnings
+
+      - name: Verify Dependency Graph & Licenses (cargo-deny)
+        run: cargo deny check advisories licenses bans sources
+
+  # ---------------------------------------------------------------------------
+  # 2. MULTI-PLATFORM RELEASE BUILD & NATIVE OS PACKAGING MATRIX
+  # ---------------------------------------------------------------------------
+  build-release:
+    name: Release (${{ matrix.target }})
+    needs: [pre-release-gate]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux
+            native_exec: true
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            platform: linux
+            native_exec: true
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: macos
+            native_exec: true
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: windows
+            native_exec: true
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            platform: windows
+            native_exec: false
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Resolve Release Version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            RAW_TAG="${GITHUB_REF_NAME}"
+            VERSION="${RAW_TAG#v}"
+          else
+            VERSION="${{ inputs.version || '0.1.0-rc1' }}"
+            VERSION="${VERSION#v}"
+            RAW_TAG="v${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${RAW_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install Linux Build & Packaging Dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libwayland-dev \
+            libdrm-dev \
+            libgbm-dev \
+            libinput-dev \
+            libseat-dev \
+            libudev-dev \
+            libxkbcommon-dev \
+            libdbus-1-dev \
+            rpm
+
+      - name: Install Stable Rust Toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache Setup
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "release-${{ matrix.target }}"
+
+      - name: Build LTO Optimized Release Binaries
+        shell: bash
+        env:
+          AWS_LC_SYS_NO_ASM: ${{ matrix.target == 'aarch64-pc-windows-msvc' && '1' || '0' }}
+        run: |
+          cargo build --workspace --release --locked --target "${{ matrix.target }}"
+
+      - name: Execute Release Binary Smoke Validation
+        if: matrix.native_exec
+        shell: bash
+        env:
+          RFERRAM_SMOKE_TEST: "1"
+          RFERRAM_BIND_ADDR: "127.0.0.1:0"
+        run: |
+          if [[ "${{ matrix.platform }}" == "windows" ]]; then
+            ./target/${{ matrix.target }}/release/rferram-server.exe
+            ./target/${{ matrix.target }}/release/rferram-ui.exe
+          else
+            ./target/${{ matrix.target }}/release/rferram-server
+            ./target/${{ matrix.target }}/release/rferram-ui
+          fi
+
+      - name: Package Linux Release Artifacts (.tar.gz, .deb, .rpm)
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          bash packaging/linux/package-linux.sh "${{ steps.meta.outputs.version }}" "${{ matrix.target }}" dist
+
+      - name: Package macOS Release Artifacts (.tar.gz, rFerram.app, .dmg)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          bash packaging/macos/package-macos.sh "${{ steps.meta.outputs.version }}" "${{ matrix.target }}" dist
+
+      - name: Package Windows Release Artifacts (.zip, .msi)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          ./packaging/windows/package-windows.ps1 `
+            -Version "${{ steps.meta.outputs.version }}" `
+            -Target "${{ matrix.target }}" `
+            -OutDir "dist"
+
+      - name: Upload Target Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3. CONSOLIDATED CHECKSUM MANIFEST & GITHUB RELEASE PUBLICATION
+  # ---------------------------------------------------------------------------
+  publish-release:
+    name: Checksums & Release Publication
+    needs: [build-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve Release Tag & Version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            RAW_TAG="${GITHUB_REF_NAME}"
+            VERSION="${RAW_TAG#v}"
+          else
+            VERSION="${{ inputs.version || '0.1.0-rc1' }}"
+            VERSION="${VERSION#v}"
+            RAW_TAG="v${VERSION}"
+          fi
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${RAW_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download All Platform Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA-256 Checksum Manifest (SHA256SUMS.txt)
+        working-directory: release-assets
+        run: |
+          sha256sum * | tee SHA256SUMS.txt
+
+      - name: Upload Consolidated Release Bundle Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rferram-${{ steps.meta.outputs.version }}-all-platforms
+          path: release-assets/*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish_github_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: "rFerram ${{ steps.meta.outputs.tag }}"
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || contains(steps.meta.outputs.tag, '-') }}
+          generate_release_notes: true
+          files: release-assets/*

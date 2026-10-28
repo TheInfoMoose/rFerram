@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>rFerram</string>
+    <key>CFBundleExecutable</key>
+    <string>rferram-ui</string>
+    <key>CFBundleIconFile</key>
+    <string>rFerram.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.theinfomoose.rFerram</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>rFerram</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>rFerram requires Screen Recording permission to capture display frames via ScreenCaptureKit when hosting a remote session.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>rFerram requires Microphone access for bi-directional voice passthrough during remote sessions.</string>
+</dict>
+</plist>

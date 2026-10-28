@@ -1,0 +1,15 @@
+[Unit]
+Description=rFerram Elevated Host Capture & QUIC Display Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment="RFERRAM_BIND_ADDR=0.0.0.0:4433"
+ExecStart=/usr/bin/rferram-server
+Restart=on-failure
+RestartSec=5
+AmbientCapabilities=CAP_NET_RAW CAP_SYS_ADMIN
+
+[Install]
+WantedBy=multi-user.target

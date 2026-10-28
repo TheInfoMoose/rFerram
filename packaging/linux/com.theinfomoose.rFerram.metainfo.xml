@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.theinfomoose.rFerram</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <name>rFerram</name>
+  <summary>Zero-copy QUIC remote display application for COSMIC and modern desktops</summary>
+  <description>
+    <p>
+      rFerram is a hyper-optimized, zero-copy, cross-platform remote display application built in pure Rust.
+      It combines UDP-backed QUIC transport (quinn + rustls), hardware video pipelines (AV1, H.265, H.264),
+      native VPN adapter binding (WireGuard, Tailscale, UniFi), and snapshot-backed file synchronization.
+    </p>
+  </description>
+  <launchable type="desktop-id">com.theinfomoose.rFerram.desktop</launchable>
+  <url type="homepage">https://github.com/TheInfoMoose/rFerram</url>
+  <developer id="com.theinfomoose">
+    <name>TheInfoMoose</name>
+  </developer>
+  <provides>
+    <binary>rferram-ui</binary>
+    <binary>rferram-server</binary>
+  </provides>
+  <content_rating type="oars-1.1" />
+</component>
