@@ -23,6 +23,10 @@ pub enum ProtocolError {
 
 /// Serializes a [`WireMessage`] into a compact binary `postcard` payload.
 pub fn encode_wire_message(msg: &WireMessage) -> Result<Vec<u8>, ProtocolError> {
+    let estimated = msg.estimated_payload_bytes();
+    if estimated > MAX_WIRE_FRAME_BYTES {
+        return Err(ProtocolError::FrameTooLarge(estimated));
+    }
     let bytes = postcard::to_stdvec(msg)?;
     if bytes.len() > MAX_WIRE_FRAME_BYTES {
         return Err(ProtocolError::FrameTooLarge(bytes.len()));
@@ -80,6 +84,73 @@ pub enum WireMessage {
     Control(ControlMessage),
     /// Out-of-band virtual channel payloads (Clipboard, ST file sync, Passthrough).
     Channel(VirtualChannelMessage),
+}
+
+impl WireMessage {
+    /// Returns a fast lower-bound estimate of variable-length inner payload bytes
+    /// to reject clearly oversized frames before allocating a serialization buffer.
+    pub fn estimated_payload_bytes(&self) -> usize {
+        match self {
+            Self::Handshake(msg) => match msg {
+                HandshakeMessage::ClientHello {
+                    client_id,
+                    client_name,
+                    supported_codecs,
+                    auth_methods,
+                    ..
+                } => {
+                    client_id.len()
+                        + client_name.len()
+                        + supported_codecs.len()
+                        + auth_methods.len()
+                }
+                HandshakeMessage::ServerHello {
+                    server_id,
+                    auth_challenge,
+                    ..
+                } => server_id.len() + auth_challenge.len(),
+                HandshakeMessage::AuthRequest { credentials, .. } => credentials.len(),
+                HandshakeMessage::AuthResponse {
+                    session_token,
+                    error_message,
+                    ..
+                } => {
+                    session_token.as_ref().map_or(0, String::len)
+                        + error_message.as_ref().map_or(0, String::len)
+                }
+            },
+            Self::Topology(msg) => match msg {
+                TopologyMessage::DisplayLayout { monitors } => {
+                    monitors.iter().map(|m| m.name.len()).sum()
+                }
+                TopologyMessage::DisplayAdded(monitor) => monitor.name.len(),
+                TopologyMessage::ResizeRequest { .. } | TopologyMessage::DisplayRemoved { .. } => 0,
+            },
+            Self::Video(frame) => frame.payload.len(),
+            Self::Audio(frame) => frame.payload.len(),
+            Self::Input(event) => match event {
+                InputEvent::TextInput { text } => text.len(),
+                _ => 0,
+            },
+            Self::Control(ctrl) => match ctrl {
+                ControlMessage::LossReport { missing_frames } => missing_frames.len(),
+                ControlMessage::Disconnect { reason } => reason.len(),
+                _ => 0,
+            },
+            Self::Channel(chan) => match chan {
+                VirtualChannelMessage::Clipboard(payload) => match payload {
+                    ClipboardPayload::Text(text) => text.len(),
+                    ClipboardPayload::Image { format, data, .. } => format.len() + data.len(),
+                    ClipboardPayload::Files(files) => files.iter().map(String::len).sum(),
+                },
+                VirtualChannelMessage::SimplyTransfer(data) => data.len(),
+                VirtualChannelMessage::DevicePassthrough { device_id, data } => {
+                    device_id.len() + data.len()
+                }
+                VirtualChannelMessage::RequestElevation => 0,
+            },
+        }
+    }
 }
 
 // ============================================================================
