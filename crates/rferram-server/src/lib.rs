@@ -22,8 +22,43 @@ use tracing::{debug, error, info, warn};
 use rferram_common::{NistVault, RuntimeEnvironment};
 use rferram_protocol::{
     AudioCodec, AudioDirection, AudioFrameMessage, ControlMessage, HandshakeMessage, InputEvent,
-    PixelFormat, VideoCodec, VideoFrameMessage, WireMessage,
+    PixelFormat, WireMessage,
 };
+
+pub mod backends;
+pub use backends::{
+    CG_EVENT_FLAG_MASK_ALTERNATE, CG_EVENT_FLAG_MASK_COMMAND, CG_EVENT_FLAG_MASK_CONTROL,
+    CG_EVENT_FLAG_MASK_SHIFT, CV_PIXEL_FORMAT_32BGRA, CV_PIXEL_FORMAT_32RGBA, CV_PIXEL_FORMAT_420F,
+    CV_PIXEL_FORMAT_420V, CV_PIXEL_FORMAT_Y420, CV_PIXEL_FORMAT_Y444, CgMouseEventKind,
+    DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_NV12, DRM_FORMAT_XBGR8888,
+    DRM_FORMAT_XRGB8888, DXGI_FORMAT_B8G8R8A8_UNORM_RAW, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB_RAW,
+    DXGI_FORMAT_NV12_RAW, DXGI_FORMAT_R8G8B8A8_UNORM_RAW, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB_RAW,
+    DmaBufPlaneDescriptor, DxgiSubresourceLayout, EVDEV_BTN_EXTRA, EVDEV_BTN_LEFT,
+    EVDEV_BTN_MIDDLE, EVDEV_BTN_RIGHT, EVDEV_BTN_SIDE, FrameCapturer, GbmDmabufSurface,
+    IoSurfacePlaneDescriptor, LinuxCaptureController, LinuxInputController, MacOsCgEventInjector,
+    MacOsIoSurfaceDescriptor, MacOsScreenCaptureKitCapturer, NormalizedPointerCoords,
+    TranslatedCgEvent, TranslatedWin32Input, VK_CONTROL_CODE, VK_LWIN_CODE, VK_MENU_CODE,
+    VK_SHIFT_CODE, WIN32_KEYEVENTF_EXTENDEDKEY, WIN32_KEYEVENTF_KEYUP, WIN32_KEYEVENTF_SCANCODE,
+    WIN32_KEYEVENTF_UNICODE, WIN32_MOUSEEVENTF_ABSOLUTE, WIN32_MOUSEEVENTF_HWHEEL,
+    WIN32_MOUSEEVENTF_LEFTDOWN, WIN32_MOUSEEVENTF_LEFTUP, WIN32_MOUSEEVENTF_MIDDLEDOWN,
+    WIN32_MOUSEEVENTF_MIDDLEUP, WIN32_MOUSEEVENTF_MOVE, WIN32_MOUSEEVENTF_RIGHTDOWN,
+    WIN32_MOUSEEVENTF_RIGHTUP, WIN32_MOUSEEVENTF_VIRTUALDESK, WIN32_MOUSEEVENTF_WHEEL,
+    WIN32_MOUSEEVENTF_XDOWN, WIN32_MOUSEEVENTF_XUP, WIN32_WHEEL_DELTA, WIN32_XBUTTON1,
+    WIN32_XBUTTON2, WaylandDmabufCapturer, WaylandVirtualInputInjector, WindowsDxgiCapturer,
+    WindowsDxgiSurfaceDescriptor, WindowsSendInputInjector, X11_BUTTON_BACK, X11_BUTTON_FORWARD,
+    X11_BUTTON_LEFT, X11_BUTTON_MIDDLE, X11_BUTTON_RIGHT, X11_BUTTON_SCROLL_DOWN,
+    X11_BUTTON_SCROLL_LEFT, X11_BUTTON_SCROLL_RIGHT, X11_BUTTON_SCROLL_UP, X11ShmCapturer,
+    X11XTestInputInjector, XKB_EVDEV_OFFSET, encode_win32_modifier_transitions,
+    encode_xkb_modifiers_mask, evdev_to_x11_keycode, map_cv_pixel_format_to_wire,
+    map_drm_fourcc_to_pixel_format, map_dxgi_format_to_wire, map_scancode_to_macos_keycode,
+    map_scancode_to_win32_vk, mouse_button_to_evdev, mouse_button_to_x11_detail,
+    normalize_pointer_coordinates, normalize_win32_absolute_coords,
+    normalize_win32_virtual_desktop_coords, translate_input_event_to_cg,
+    translate_input_event_to_win32, translate_key_to_evdev_scancode,
+    translate_modifiers_to_cg_flags,
+};
+pub mod encoder;
+pub use encoder::{EncoderConfig, MacOsVideoToolboxEncoder, SoftwareVideoEncoder, VideoEncoder};
 
 /// Operating System Display & Frame Capture Backend
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,157 +87,6 @@ pub struct CapturedFrame {
     pub is_dmabuf_or_metal_handle: bool,
 }
 
-/// Hardware / Software Encoder Configuration
-#[derive(Debug, Clone)]
-pub struct EncoderConfig {
-    pub codec: VideoCodec,
-    pub width: u32,
-    pub height: u32,
-    pub target_fps: u32,
-    pub target_bitrate_kbps: u32,
-    pub enable_hardware_accel: bool,
-    pub keyframe_interval: u32,
-}
-
-impl Default for EncoderConfig {
-    fn default() -> Self {
-        Self {
-            codec: VideoCodec::AV1,
-            width: 2560,
-            height: 1440,
-            target_fps: 60,
-            target_bitrate_kbps: 15_000,
-            enable_hardware_accel: true,
-            keyframe_interval: 60,
-        }
-    }
-}
-
-/// Abstraction interface for Hardware-Accelerated Video Encoders (NVENC, VAAPI, Apple VideoToolbox, QuickSync, rav1e)
-pub trait VideoEncoder: Send + Sync {
-    fn encode(&mut self, frame: &CapturedFrame, force_keyframe: bool) -> Result<VideoFrameMessage>;
-    fn update_bitrate(&mut self, target_bitrate_kbps: u32) -> Result<()>;
-    fn update_framerate(&mut self, target_fps: u32) -> Result<()>;
-}
-
-/// macOS Apple Silicon / VideoToolbox Hardware Accelerated Video Encoder
-pub struct MacOsVideoToolboxEncoder {
-    config: EncoderConfig,
-    frame_counter: u64,
-}
-
-impl MacOsVideoToolboxEncoder {
-    pub fn new(config: EncoderConfig) -> Self {
-        info!(
-            width = config.width,
-            height = config.height,
-            codec = ?config.codec,
-            "Initialized macOS VideoToolbox Hardware Encoder (Apple Silicon / Intel Media Engine)"
-        );
-        Self {
-            config,
-            frame_counter: 0,
-        }
-    }
-}
-
-impl VideoEncoder for MacOsVideoToolboxEncoder {
-    fn encode(&mut self, frame: &CapturedFrame, force_keyframe: bool) -> Result<VideoFrameMessage> {
-        self.frame_counter += 1;
-        let is_keyframe = force_keyframe
-            || self.frame_counter == 1
-            || self
-                .frame_counter
-                .is_multiple_of(self.config.keyframe_interval.max(1) as u64);
-
-        let payload_size = std::cmp::min(2048, frame.data.len());
-        let encoded_payload = frame.data[..payload_size].to_vec();
-
-        Ok(VideoFrameMessage {
-            frame_id: self.frame_counter,
-            monitor_id: frame.display_id,
-            timestamp_us: frame.timestamp_us,
-            codec: self.config.codec,
-            is_keyframe,
-            width: frame.width,
-            height: frame.height,
-            stride: frame.stride,
-            format: frame.pixel_format,
-            payload: encoded_payload,
-        })
-    }
-
-    fn update_bitrate(&mut self, target_bitrate_kbps: u32) -> Result<()> {
-        self.config.target_bitrate_kbps = target_bitrate_kbps;
-        debug!(
-            target_bitrate_kbps,
-            "VideoToolbox target bitrate updated dynamically"
-        );
-        Ok(())
-    }
-
-    fn update_framerate(&mut self, target_fps: u32) -> Result<()> {
-        self.config.target_fps = target_fps;
-        debug!(
-            target_fps,
-            "VideoToolbox target framerate updated dynamically"
-        );
-        Ok(())
-    }
-}
-
-/// General Hardware/AV1 Fallback Video Encoder
-pub struct SoftwareVideoEncoder {
-    config: EncoderConfig,
-    frame_counter: u64,
-}
-
-impl SoftwareVideoEncoder {
-    pub fn new(config: EncoderConfig) -> Self {
-        Self {
-            config,
-            frame_counter: 0,
-        }
-    }
-}
-
-impl VideoEncoder for SoftwareVideoEncoder {
-    fn encode(&mut self, frame: &CapturedFrame, force_keyframe: bool) -> Result<VideoFrameMessage> {
-        self.frame_counter += 1;
-        let is_keyframe = force_keyframe
-            || self.frame_counter == 1
-            || self
-                .frame_counter
-                .is_multiple_of(self.config.keyframe_interval.max(1) as u64);
-
-        let payload_size = std::cmp::min(1024, frame.data.len());
-        let encoded_payload = frame.data[..payload_size].to_vec();
-
-        Ok(VideoFrameMessage {
-            frame_id: self.frame_counter,
-            monitor_id: frame.display_id,
-            timestamp_us: frame.timestamp_us,
-            codec: self.config.codec,
-            is_keyframe,
-            width: frame.width,
-            height: frame.height,
-            stride: frame.stride,
-            format: frame.pixel_format,
-            payload: encoded_payload,
-        })
-    }
-
-    fn update_bitrate(&mut self, target_bitrate_kbps: u32) -> Result<()> {
-        self.config.target_bitrate_kbps = target_bitrate_kbps;
-        Ok(())
-    }
-
-    fn update_framerate(&mut self, target_fps: u32) -> Result<()> {
-        self.config.target_fps = target_fps;
-        Ok(())
-    }
-}
-
 /// Abstract Native Host Input Injector (Wayland Smithay, Windows SendInput & macOS CGEvent)
 pub trait HostInputInjector: Send + Sync {
     fn inject_input(&self, event: &InputEvent) -> Result<()>;
@@ -211,93 +95,55 @@ pub trait HostInputInjector: Send + Sync {
 /// Cross-Platform Native Input Injector Implementation
 pub struct NativeInputInjector {
     backend: CaptureBackendType,
+    linux_controller: Option<LinuxInputController>,
+    macos_injector: Option<MacOsCgEventInjector>,
+    windows_injector: Option<WindowsSendInputInjector>,
 }
 
 impl NativeInputInjector {
     pub fn new(backend: CaptureBackendType) -> Self {
-        Self { backend }
+        let linux_controller = match backend {
+            CaptureBackendType::WaylandPipeWire | CaptureBackendType::X11Fallback => {
+                LinuxInputController::new(backend, 2560, 1440).ok()
+            }
+            _ => None,
+        };
+        let macos_injector = match backend {
+            CaptureBackendType::MacOsScreenCaptureKit => {
+                Some(MacOsCgEventInjector::new_live(2560, 1440))
+            }
+            _ => None,
+        };
+        let windows_injector = match backend {
+            CaptureBackendType::WindowsDxgi => Some(WindowsSendInputInjector::new_live(2560, 1440)),
+            _ => None,
+        };
+        Self {
+            backend,
+            linux_controller,
+            macos_injector,
+            windows_injector,
+        }
     }
 }
 
 impl HostInputInjector for NativeInputInjector {
     fn inject_input(&self, event: &InputEvent) -> Result<()> {
         match self.backend {
-            CaptureBackendType::MacOsScreenCaptureKit => match event {
-                InputEvent::MouseMove {
-                    monitor_id,
-                    x,
-                    y,
-                    is_absolute,
-                } => {
-                    debug!(
-                        monitor_id,
-                        x, y, is_absolute, "macOS CGEventSource / CGEventCreateMouseEvent injected"
-                    );
+            CaptureBackendType::MacOsScreenCaptureKit => {
+                if let Some(injector) = &self.macos_injector {
+                    injector.inject_input(event)?;
                 }
-                InputEvent::MouseButton {
-                    button,
-                    state,
-                    x,
-                    y,
-                } => {
-                    debug!(
-                        ?button,
-                        ?state,
-                        x,
-                        y,
-                        "macOS CGEvent mouse button state injected"
-                    );
+            }
+            CaptureBackendType::WaylandPipeWire | CaptureBackendType::X11Fallback => {
+                if let Some(ctrl) = &self.linux_controller {
+                    ctrl.inject_input(event)?;
                 }
-                InputEvent::KeyEvent {
-                    key_code,
-                    scancode,
-                    state,
-                    modifiers,
-                } => {
-                    debug!(
-                        key_code,
-                        scancode,
-                        ?state,
-                        ?modifiers,
-                        "macOS CGEventCreateKeyboardEvent injected"
-                    );
+            }
+            CaptureBackendType::WindowsDxgi => {
+                if let Some(injector) = &self.windows_injector {
+                    injector.inject_input(event)?;
                 }
-                InputEvent::TextInput { text } => {
-                    debug!(
-                        text,
-                        "macOS CGEventPostKeyboardEvent unicode payload posted"
-                    );
-                }
-                _ => {}
-            },
-            CaptureBackendType::WaylandPipeWire => match event {
-                InputEvent::MouseMove { x, y, .. } => {
-                    debug!(x, y, "Wayland/Smithay virtual pointer event injected");
-                }
-                InputEvent::KeyEvent {
-                    scancode, state, ..
-                } => {
-                    debug!(
-                        scancode,
-                        ?state,
-                        "Wayland/Smithay virtual keyboard scancode injected"
-                    );
-                }
-                _ => {}
-            },
-            CaptureBackendType::WindowsDxgi => match event {
-                InputEvent::MouseMove { x, y, .. } => {
-                    debug!(x, y, "Windows SendInput mouse position injected");
-                }
-                InputEvent::KeyEvent {
-                    key_code, state, ..
-                } => {
-                    debug!(key_code, ?state, "Windows SendInput key state injected");
-                }
-                _ => {}
-            },
-            CaptureBackendType::X11Fallback => {
-                debug!(?event, "X11 XTest fake input injected");
             }
         }
         Ok(())
@@ -560,10 +406,10 @@ impl RFerramHostDaemon {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_forced_keyframe_on_packet_loss() {
+    #[tokio::test]
+    async fn test_forced_keyframe_on_packet_loss() {
         let mut encoder = SoftwareVideoEncoder::new(EncoderConfig {
-            keyframe_interval: 60,
+            keyframe_interval: 5,
             ..Default::default()
         });
         let dummy_frame = CapturedFrame {
@@ -593,5 +439,24 @@ mod tests {
         // Frame 4 returns to normal inter-frame
         let msg4 = encoder.encode(&dummy_frame, false).unwrap();
         assert!(!msg4.is_keyframe);
+
+        // Frame 5 hits keyframe_interval multiple (5)
+        let msg5 = encoder.encode(&dummy_frame, false).unwrap();
+        assert!(msg5.is_keyframe);
+
+        // Verify ControlMessage::LossReport triggers force_keyframe_flag on HostSessionEngine
+        let session = HostSessionEngine::new(
+            "test-session".to_string(),
+            CaptureBackendType::WaylandPipeWire,
+            EncoderConfig::default(),
+        );
+        session.force_keyframe_flag.store(false, Ordering::SeqCst);
+        session
+            .handle_incoming_wire_message(WireMessage::Control(ControlMessage::LossReport {
+                missing_frames: vec![2, 3],
+            }))
+            .await
+            .unwrap();
+        assert!(session.force_keyframe_flag.load(Ordering::SeqCst));
     }
 }
