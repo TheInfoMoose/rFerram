@@ -1,5 +1,8 @@
 name: rFerram Continuous Integration
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ "main", "develop" ]
@@ -30,13 +33,13 @@ jobs:
       - name: Rust Cache Setup
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Cargo Audit (NIST & RustSec CVE Verification)
-        uses: rustsec/audit-check@v2.0.0
+      - name: Install cargo-audit & cargo-deny
+        uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit,cargo-deny
 
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked || true
+      - name: Run Cargo Audit (NIST & RustSec CVE Verification)
+        run: cargo audit --deny warnings
 
       - name: Check Dependencies & Licensing (cargo-deny)
         run: cargo deny check advisories licenses bans sources

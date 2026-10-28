@@ -1,5 +1,8 @@
 name: rFerram Continuous Integration
 
+permissions:
+  contents: read
+
 on:
   push:
     branches: [ "main", "develop" ]
@@ -15,7 +18,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 1. SECURITY & DEPENDENCY AUDIT
+  # 1. SECURITY & DEPENDENCY AUDIT (NIST & RustSec CVE Verification)
   # ---------------------------------------------------------------------------
   security-audit:
     name: Security & Dependency Audit
@@ -30,13 +33,13 @@ jobs:
       - name: Rust Cache Setup
         uses: Swatinem/rust-cache@v2
 
-      - name: Run Cargo Audit (NIST & RustSec CVE Verification)
-        uses: rustsec/audit-check@v2.0.0
+      - name: Install cargo-audit & cargo-deny
+        uses: taiki-e/install-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tool: cargo-audit,cargo-deny
 
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked || true
+      - name: Run Cargo Audit (NIST & RustSec CVE Verification)
+        run: cargo audit --deny warnings
 
       - name: Check Dependencies & Licensing (cargo-deny)
         run: cargo deny check advisories licenses bans sources
@@ -51,6 +54,20 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
+      - name: Install Linux System Headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libwayland-dev \
+            libdrm-dev \
+            libgbm-dev \
+            libinput-dev \
+            libseat-dev \
+            libudev-dev \
+            libxkbcommon-dev \
+            libdbus-1-dev
+
       - name: Install Rust Toolchain with Clippy and Rustfmt
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -63,7 +80,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy Linter
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   # ---------------------------------------------------------------------------
   # 3. CROSS-PLATFORM COMPILATION & UNIT TESTING MATRIX
@@ -81,17 +98,20 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Install Linux Build Dependencies (Wayland, PipeWire, Alsa)
+      - name: Install Linux Build Dependencies (Wayland, DRM/GBM, XKB, D-Bus)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
             libwayland-dev \
-            libpipewire-0.3-dev \
-            libclang-dev \
-            libdbus-1-dev \
-            libasound2-dev
+            libdrm-dev \
+            libgbm-dev \
+            libinput-dev \
+            libseat-dev \
+            libudev-dev \
+            libxkbcommon-dev \
+            libdbus-1-dev
 
       - name: Install Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -100,7 +120,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Verify Workspace Cargo.lock Reproducibility
-        run: cargo check --workspace --locked
+        run: cargo check --workspace --all-targets --locked
 
-      - name: Execute Workspace Unit Tests
+      - name: Execute Workspace Unit & Integration Tests
         run: cargo test --workspace --all-targets --locked -- --nocapture
