@@ -2,7 +2,7 @@
 //!
 //! Central domain models, session configuration profiles, OS/desktop environment
 //! detection (Linux Debian/RHEL/SUSE/Arch, COSMIC Desktop, Windows, macOS), and
-//! NIST-compliant credential vault abstractions backed by `keyring` and `simply-transfer-crypto`.
+//! NIST-compliant credential vault abstractions backed by `keyring-core` and `simply-transfer-crypto`.
 
 pub mod env;
 pub mod models;

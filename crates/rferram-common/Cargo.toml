@@ -11,7 +11,6 @@ description = "Shared domain models, OS environment detection, and NIST-complian
 [dependencies]
 ed25519-dalek = { workspace = true }
 hex = { workspace = true }
-keyring = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

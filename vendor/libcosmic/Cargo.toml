@@ -27,7 +27,4 @@ tiny-skia = "0.12.0"
 tokio = { version = "1.53.3", features = ["rt", "sync", "time", "macros"], optional = true }
 tracing = "0.1.44"
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "dx12", "wgsl"], optional = true }
-winit = { version = "0.30.13", optional = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"], optional = true }

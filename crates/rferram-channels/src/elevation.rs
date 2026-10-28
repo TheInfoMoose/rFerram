@@ -2,7 +2,7 @@
 //! Linux `polkit`/`sudo`, and macOS `launchd`.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use anyhow::Result;
 use tokio::sync::mpsc;
@@ -35,6 +35,15 @@ impl ElevationMechanism {
             | PlatformDistribution::LinuxGeneric => Self::LinuxPolkitOrSudo,
         }
     }
+
+    /// Returns the canonical OS elevation program associated with this mechanism.
+    pub fn command_program(&self) -> &'static str {
+        match self {
+            Self::LinuxPolkitOrSudo => "pkexec",
+            Self::WindowsUac => "runas",
+            Self::MacOsLaunchd => "launchctl",
+        }
+    }
 }
 
 /// Privileged OS Elevation Request Handler (Windows UAC, Linux polkit/sudo, macOS launchd)
@@ -43,6 +52,7 @@ pub struct ElevationChannelHandler {
     mechanism: ElevationMechanism,
     requests_sent: Arc<AtomicU64>,
     requests_received: Arc<AtomicU64>,
+    session_elevated: Arc<AtomicBool>,
 }
 
 impl Default for ElevationChannelHandler {
@@ -55,10 +65,16 @@ impl ElevationChannelHandler {
     /// Creates a new [`ElevationChannelHandler`] detecting the current OS [`ElevationMechanism`].
     pub fn new() -> Self {
         let env = RuntimeEnvironment::detect();
+        Self::with_mechanism(ElevationMechanism::for_platform(env.platform))
+    }
+
+    /// Creates a new [`ElevationChannelHandler`] configured for an explicit [`ElevationMechanism`].
+    pub fn with_mechanism(mechanism: ElevationMechanism) -> Self {
         Self {
-            mechanism: ElevationMechanism::for_platform(env.platform),
+            mechanism,
             requests_sent: Arc::new(AtomicU64::new(0)),
             requests_received: Arc::new(AtomicU64::new(0)),
+            session_elevated: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -77,6 +93,11 @@ impl ElevationChannelHandler {
         self.requests_received.load(Ordering::SeqCst)
     }
 
+    /// Returns whether the host session has processed an elevation request.
+    pub fn is_session_elevated(&self) -> bool {
+        self.session_elevated.load(Ordering::SeqCst)
+    }
+
     /// Sends a [`VirtualChannelMessage::RequestElevation`] control frame to the remote host daemon.
     pub async fn request_host_elevation(
         &self,
@@ -84,6 +105,7 @@ impl ElevationChannelHandler {
     ) -> Result<()> {
         info!(
             mechanism = ?self.mechanism,
+            program = self.mechanism.command_program(),
             "Sending elevation request token to host daemon"
         );
         let msg = WireMessage::Channel(VirtualChannelMessage::RequestElevation);
@@ -95,8 +117,10 @@ impl ElevationChannelHandler {
     /// Processes an incoming [`VirtualChannelMessage::RequestElevation`] on the host daemon.
     pub async fn handle_elevation_request(&self) -> Result<()> {
         let count = self.requests_received.fetch_add(1, Ordering::SeqCst) + 1;
+        self.session_elevated.store(true, Ordering::SeqCst);
         info!(
             mechanism = ?self.mechanism,
+            program = self.mechanism.command_program(),
             request_count = count,
             "Host daemon received remote UAC / polkit / sudo elevation request"
         );
@@ -113,6 +137,7 @@ mod tests {
         let handler = ElevationChannelHandler::new();
         assert_eq!(handler.requests_sent(), 0);
         assert_eq!(handler.requests_received(), 0);
+        assert!(!handler.is_session_elevated());
 
         let (tx, mut rx) = mpsc::channel(4);
         handler
@@ -132,21 +157,29 @@ mod tests {
             .await
             .expect("Inbound elevation request handling should succeed");
         assert_eq!(handler.requests_received(), 1);
+        assert!(handler.is_session_elevated());
     }
 
     #[test]
     fn test_elevation_mechanism_mapping() {
-        assert_eq!(
-            ElevationMechanism::for_platform(PlatformDistribution::LinuxArch),
-            ElevationMechanism::LinuxPolkitOrSudo
-        );
-        assert_eq!(
-            ElevationMechanism::for_platform(PlatformDistribution::Windows),
-            ElevationMechanism::WindowsUac
-        );
-        assert_eq!(
-            ElevationMechanism::for_platform(PlatformDistribution::MacOs),
-            ElevationMechanism::MacOsLaunchd
-        );
+        for distro in [
+            PlatformDistribution::LinuxDebian,
+            PlatformDistribution::LinuxRhel,
+            PlatformDistribution::LinuxSuse,
+            PlatformDistribution::LinuxArch,
+            PlatformDistribution::LinuxGeneric,
+        ] {
+            let mech = ElevationMechanism::for_platform(distro);
+            assert_eq!(mech, ElevationMechanism::LinuxPolkitOrSudo);
+            assert_eq!(mech.command_program(), "pkexec");
+        }
+
+        let win = ElevationMechanism::for_platform(PlatformDistribution::Windows);
+        assert_eq!(win, ElevationMechanism::WindowsUac);
+        assert_eq!(win.command_program(), "runas");
+
+        let mac = ElevationMechanism::for_platform(PlatformDistribution::MacOs);
+        assert_eq!(mac, ElevationMechanism::MacOsLaunchd);
+        assert_eq!(mac.command_program(), "launchctl");
     }
 }

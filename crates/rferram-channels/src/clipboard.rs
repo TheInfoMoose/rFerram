@@ -124,38 +124,48 @@ impl ClipboardChannelHandler {
         Ok(())
     }
 
+    /// Returns the most recently synchronized clipboard content snapshot.
+    pub async fn last_content(&self) -> ClipboardContent {
+        self.last_sent_content.lock().await.clone()
+    }
+
     /// Ingests incoming remote clipboard payloads and updates the local OS pasteboard.
     pub async fn handle_remote_clipboard(&self, payload: ClipboardPayload) -> Result<()> {
         self.is_suppressed.store(true, Ordering::SeqCst);
 
         let mut cb_lock = self.clipboard.lock().await;
-        if let Some(cb) = cb_lock.as_mut() {
-            match payload {
-                ClipboardPayload::Text(text) => {
-                    info!(
-                        text_len = text.len(),
-                        "Injecting remote text into system clipboard"
-                    );
+        match payload {
+            ClipboardPayload::Text(text) => {
+                info!(
+                    text_len = text.len(),
+                    "Injecting remote text into system clipboard"
+                );
+                {
                     let mut last = self.last_sent_content.lock().await;
                     *last = ClipboardContent::Text(text.clone());
+                }
+                if let Some(cb) = cb_lock.as_mut() {
                     let _ = cb.set_text(text);
                 }
-                ClipboardPayload::Image {
+            }
+            ClipboardPayload::Image {
+                width,
+                height,
+                format: _,
+                data,
+            } => {
+                info!(
                     width,
                     height,
-                    format: _,
-                    data,
-                } => {
-                    info!(
-                        width,
-                        height,
-                        data_bytes = data.len(),
-                        "Injecting remote image into system clipboard"
-                    );
-                    let hash = calculate_image_hash(&data);
+                    data_bytes = data.len(),
+                    "Injecting remote image into system clipboard"
+                );
+                let hash = calculate_image_hash(&data);
+                {
                     let mut last = self.last_sent_content.lock().await;
                     *last = ClipboardContent::ImageHash(hash);
-
+                }
+                if let Some(cb) = cb_lock.as_mut() {
                     let img_data = ImageData {
                         width: width.max(1) as usize,
                         height: height.max(1) as usize,
@@ -163,14 +173,14 @@ impl ClipboardChannelHandler {
                     };
                     let _ = cb.set_image(img_data);
                 }
-                ClipboardPayload::Files(files) => {
-                    info!(
-                        count = files.len(),
-                        "Injecting remote file path list into system clipboard"
-                    );
-                    let mut last = self.last_sent_content.lock().await;
-                    *last = ClipboardContent::Files(files);
-                }
+            }
+            ClipboardPayload::Files(files) => {
+                info!(
+                    count = files.len(),
+                    "Injecting remote file path list into system clipboard"
+                );
+                let mut last = self.last_sent_content.lock().await;
+                *last = ClipboardContent::Files(files);
             }
         }
         drop(cb_lock);

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use simply_transfer_crypto::hash::compute_sha256_bytes;
 use tokio::sync::{Mutex, mpsc};
 use tracing::debug;
@@ -48,6 +48,22 @@ impl DevicePassthroughHandler {
         self.recorded_frames.lock().await.clone()
     }
 
+    /// Returns recorded passthrough frames matching a specific `device_id`.
+    pub async fn frames_for_device(&self, device_id: &str) -> Vec<DevicePassthroughFrame> {
+        self.recorded_frames
+            .lock()
+            .await
+            .iter()
+            .filter(|f| f.device_id == device_id)
+            .cloned()
+            .collect()
+    }
+
+    /// Clears all recorded passthrough telemetry frames.
+    pub async fn clear_recorded_frames(&self) {
+        self.recorded_frames.lock().await.clear();
+    }
+
     /// Emits a device passthrough payload frame over the outgoing wire transport channel.
     pub async fn send_device_data(
         &self,
@@ -56,6 +72,9 @@ impl DevicePassthroughHandler {
         outgoing_tx: mpsc::Sender<WireMessage>,
     ) -> Result<()> {
         let device_id = device_id.into();
+        if device_id.trim().is_empty() {
+            bail!("Device passthrough identifier cannot be empty");
+        }
         debug!(
             device_id = %device_id,
             bytes = data.len(),
@@ -69,16 +88,20 @@ impl DevicePassthroughHandler {
 
     /// Processes an incoming device or smartcard passthrough payload frame.
     pub async fn handle_device_data(&self, device_id: &str, data: &[u8]) -> Result<()> {
+        let trimmed_id = device_id.trim();
+        if trimmed_id.is_empty() {
+            bail!("Device passthrough identifier cannot be empty");
+        }
         let sha256_digest = compute_sha256_bytes(data);
         debug!(
-            device_id = %device_id,
+            device_id = %trimmed_id,
             bytes = data.len(),
             sha256 = %sha256_digest,
             "Processing device passthrough frame"
         );
 
         let frame = DevicePassthroughFrame {
-            device_id: device_id.to_string(),
+            device_id: trimmed_id.to_string(),
             payload_bytes: data.len(),
             sha256_digest,
             received_at: Instant::now(),
@@ -124,5 +147,45 @@ mod tests {
             recorded[0].sha256_digest,
             compute_sha256_bytes(&sample_apdu)
         );
+    }
+
+    #[tokio::test]
+    async fn test_device_passthrough_filtering_and_validation() {
+        let handler = DevicePassthroughHandler::new();
+        let (tx, _rx) = mpsc::channel(4);
+
+        assert!(
+            handler
+                .send_device_data("   ", vec![0x01], tx)
+                .await
+                .is_err(),
+            "Empty device_id should fail outbound validation"
+        );
+        assert!(
+            handler.handle_device_data("", &[0x01]).await.is_err(),
+            "Empty device_id should fail inbound validation"
+        );
+
+        handler
+            .handle_device_data("usb-smartcard-0", &[0xAA, 0xBB])
+            .await
+            .unwrap();
+        handler
+            .handle_device_data("usb-security-key-1", &[0xCC, 0xDD, 0xEE])
+            .await
+            .unwrap();
+        handler
+            .handle_device_data("usb-smartcard-0", &[0xFF])
+            .await
+            .unwrap();
+
+        assert_eq!(handler.recorded_frames().await.len(), 3);
+        let smartcard_frames = handler.frames_for_device("usb-smartcard-0").await;
+        assert_eq!(smartcard_frames.len(), 2);
+        assert_eq!(smartcard_frames[0].payload_bytes, 2);
+        assert_eq!(smartcard_frames[1].payload_bytes, 1);
+
+        handler.clear_recorded_frames().await;
+        assert!(handler.recorded_frames().await.is_empty());
     }
 }

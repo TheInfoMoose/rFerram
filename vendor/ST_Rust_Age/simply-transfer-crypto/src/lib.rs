@@ -5,22 +5,44 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
-use keyring::Entry;
+use keyring_core::Entry;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use thiserror::Error;
 use zeroize::Zeroize;
 
 #[derive(Error, Debug)]
 pub enum CryptoError {
     #[error("Keyring error: {0}")]
-    KeyringError(#[from] keyring::Error),
+    KeyringError(#[from] keyring_core::Error),
     #[error("Value not found")]
     NotFound,
     #[error("Other error: {0}")]
     Other(String),
+}
+
+static SET_CREDENTIAL_STORE_RESULT: LazyLock<keyring_core::Result<()>> =
+    LazyLock::new(set_credential_store);
+
+fn set_credential_store() -> keyring_core::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let store = apple_native_keyring_store::keychain::Store::new()?;
+        keyring_core::set_default_store(store);
+        Ok(())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let store = windows_native_keyring_store::Store::new()?;
+        keyring_core::set_default_store(store);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Err(keyring_core::Error::NoDefaultStore)
+    }
 }
 
 /// Process-wide lock serializing every read-modify-write cycle on the shared vault file.
@@ -33,7 +55,7 @@ fn lock_vault() -> MutexGuard<'static, ()> {
 }
 
 /// Abstract storage for secrets (like SSH passphrases or profile secrets)
-/// backed by the native OS keyring with an authenticated AES-256-GCM encrypted vault fallback.
+/// backed by the native OS keyring (`keyring-core`) with an authenticated AES-256-GCM encrypted vault.
 pub struct SecureStorage {
     service_name: String,
 }
@@ -48,6 +70,11 @@ impl SecureStorage {
     }
 
     fn get_entry(&self, account: &str) -> Result<Entry, CryptoError> {
+        if SET_CREDENTIAL_STORE_RESULT.is_err() {
+            return Err(CryptoError::KeyringError(
+                keyring_core::Error::NoDefaultStore,
+            ));
+        }
         Entry::new(&self.service_name, account).map_err(CryptoError::KeyringError)
     }
 

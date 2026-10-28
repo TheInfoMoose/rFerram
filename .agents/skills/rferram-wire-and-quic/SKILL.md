@@ -15,7 +15,7 @@ Activate this skill when working on Phase 1 (`rferram-common`, `rferram-protocol
 - **Secret Zeroization**:
   - `HostCredentials` and `VaultTokenModel` must derive/implement `zeroize::Zeroize`, call `self.zeroize()` in `Drop`, and mask secret fields with `"[REDACTED]"` in custom `fmt::Debug` implementations.
 - **NIST Credential Vault (`NistVault`)**:
-  - Backed by `simply_transfer_crypto::SecureStorage` (which wraps OS `keyring` with AES-256-GCM fallback).
+  - Backed by `simply_transfer_crypto::SecureStorage` (which wraps `keyring-core` with NIST SP 800-57 AES-256-GCM encrypted vault).
   - Always zeroize temporary `String` buffers returned from `self.storage.get_secret(...)` after deserializing.
 - **TLS 1.3 Channel-Bound Ed25519 Signatures**:
   - To prevent MITM attacks on self-signed peer-to-peer QUIC connections, `NistVault::sign_channel_bound_challenge` and `verify_channel_bound_challenge` hash the prefix `b"rFerram-v1-ChannelBinding:"` + `challenge` + `tls_cert_sha256` (`[u8; 32]`) with SHA-256 before signing/verifying with `ed25519-dalek`.

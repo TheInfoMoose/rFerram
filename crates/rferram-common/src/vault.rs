@@ -21,8 +21,8 @@ pub enum CommonError {
     Serialization(#[from] serde_json::Error),
 }
 
-/// NIST-Compliant Credential Vault backed by OS Keyring (`keyring`) and
-/// `simply-transfer-crypto::SecureStorage` (AES-256-GCM fallback).
+/// NIST-Compliant Credential Vault backed by OS Keyring (`keyring-core`) and
+/// `simply-transfer-crypto::SecureStorage` (AES-256-GCM encrypted vault).
 pub struct NistVault {
     pub(crate) storage: SecureStorage,
 }

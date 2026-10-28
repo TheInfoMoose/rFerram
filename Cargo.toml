@@ -42,7 +42,7 @@ libcosmic = { path = "vendor/libcosmic", version = "1.0.0", features = ["tokio",
 cosmic-config = { path = "vendor/libcosmic/cosmic-config", version = "1.0.0" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "dx12", "wgsl"] }
 glow = "0.18.0"
-winit = "0.30.13"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 raw-window-handle = "0.6.2"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 tiny-skia = "0.12.0"
@@ -68,7 +68,6 @@ libseat = "0.2.4"
 udev = "0.9.3"
 xkbcommon = "0.9.0"
 x11rb = { version = "0.13.2", features = ["shm", "xfixes", "xtest", "randr"] }
-zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 # Windows DXGI / D3D11 / WASAPI / Win32 Backends
 windows = { version = "0.62.2", features = [
@@ -112,7 +111,7 @@ rand = "0.10.3"
 
 # OS Integration, Clipboard, Credentials & System Telemetry
 arboard = "3.7.0"
-keyring = "4.2.0"
+keyring-core = "1.0.0"
 sysinfo = "0.39.6"
 libc = "0.2.191"
 

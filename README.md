@@ -32,7 +32,7 @@ rFerram is structured as a 7-crate Cargo workspace ensuring strict separation of
 | **`rferram-net`** | QUIC/UDP transport layer & VPN adapter binding | `quinn`, `rustls`, `socket2`, `if-addrs`, `rcgen` |
 | **`rferram-channels`** | Virtual channels (Clipboard & `ST_Rust_Age` snapshots) | `arboard`, `simply-transfer-*`, `russh`, `sha2` |
 | **`rferram-protocol`** | Zero-copy binary wire envelope & message structs | `serde`, `postcard` |
-| **`rferram-common`** | NIST credential vault, session models, & distro detection | `keyring`, `ed25519-dalek`, `zeroize`, `simply-transfer-crypto` |
+| **`rferram-common`** | NIST credential vault, session models, & distro detection | `keyring-core`, `ed25519-dalek`, `zeroize`, `simply-transfer-crypto` |
 
 ---
 
