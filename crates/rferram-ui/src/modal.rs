@@ -134,6 +134,14 @@ impl RFerramApp {
             ],
         );
 
+        let selected_vpn_idx = match &self.add_modal_state.selected_vpn {
+            VpnAdapterBinding::Direct => 0,
+            VpnAdapterBinding::WireGuard(_) => 1,
+            VpnAdapterBinding::Tailscale => 2,
+            VpnAdapterBinding::UniFiVpn => 3,
+            VpnAdapterBinding::CustomAdapter(_) => 0,
+        };
+
         let tab_body = match self.add_modal_state.active_tab {
             AddDesktopModalTab::General
             | AddDesktopModalTab::Credentials
@@ -141,9 +149,12 @@ impl RFerramApp {
                 8,
                 vec![
                     text("Friendly Name:").into(),
-                    text_input("Optional local only name", &self.add_modal_state.name_input).into(),
+                    text_input("Optional local only name", &self.add_modal_state.name_input)
+                        .on_input(Message::UpdateModalName)
+                        .into(),
                     text("Group:").into(),
-                    dropdown(vec![String::from("Group 1")], Some(0)),
+                    dropdown(vec![String::from("Group 1")], Some(0))
+                        .on_select(|_| Message::UpdateModalGroup(String::from("Group 1"))),
                     divider(),
                     text("VPN:").into(),
                     dropdown(
@@ -153,8 +164,17 @@ impl RFerramApp {
                             String::from("Tailscale"),
                             String::from("UniFi VPN"),
                         ],
-                        Some(0),
-                    ),
+                        Some(selected_vpn_idx),
+                    )
+                    .on_select(|idx| {
+                        let vpn = match idx {
+                            1 => VpnAdapterBinding::WireGuard(String::from("wg0")),
+                            2 => VpnAdapterBinding::Tailscale,
+                            3 => VpnAdapterBinding::UniFiVpn,
+                            _ => VpnAdapterBinding::Direct,
+                        };
+                        Message::SelectModalVpn(vpn)
+                    }),
                     divider(),
                     toggler(
                         "Reconnect if the session is dropped",
@@ -213,7 +233,9 @@ impl RFerramApp {
                 vec![
                     text("Add Desktop").size(18).into(),
                     text("Connection:").into(),
-                    text_input("Host name or IP address", &self.add_modal_state.host_input).into(),
+                    text_input("Host name or IP address", &self.add_modal_state.host_input)
+                        .on_input(Message::UpdateModalHost)
+                        .into(),
                     text("Credentials:").into(),
                     dropdown(vec![String::from("Ask when required")], Some(0)),
                     tab_bar_row,
@@ -376,6 +398,92 @@ mod tests {
             folder_labels
                 .iter()
                 .any(|t| t == "Shared Folders (ST_Rust_Age Snapshot Engine)")
+        );
+    }
+
+    #[test]
+    fn test_header_and_modal_widget_callbacks() {
+        let (mut app, _) = RFerramApp::new(Core::new());
+
+        // 1. Verify SearchChanged callback in view_header
+        let header_scene = app.view_header().layout_scene(1440.0, 900.0);
+        let search_box = header_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Search connections..."
+                )
+            })
+            .expect("missing search input node");
+        let search_msg = search_box
+            .node
+            .emit_input("arch")
+            .expect("SearchChanged callback missing");
+        let _ = app.update(search_msg);
+        assert_eq!(app.search_query, "arch");
+
+        // 2. Verify UpdateModalHost, UpdateModalName, and SelectModalVpn callbacks in view_add_desktop_modal
+        let _ = app.update(Message::OpenAddDesktopModal);
+        let modal_scene = app.view_add_desktop_modal().layout_scene(1440.0, 900.0);
+
+        let host_box = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Host name or IP address"
+                )
+            })
+            .expect("missing modal host input node");
+        let host_msg = host_box
+            .node
+            .emit_input("10.55.0.12:4433")
+            .expect("UpdateModalHost callback missing");
+        let _ = app.update(host_msg);
+        assert_eq!(app.add_modal_state.host_input, "10.55.0.12:4433");
+
+        let name_box = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Optional local only name"
+                )
+            })
+            .expect("missing modal friendly name input node");
+        let name_msg = name_box
+            .node
+            .emit_input("RHEL Workstation")
+            .expect("UpdateModalName callback missing");
+        let _ = app.update(name_msg);
+        assert_eq!(app.add_modal_state.name_input, "RHEL Workstation");
+
+        let vpn_box = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Dropdown { options, .. }
+                        if options.iter().any(|o| o == "Tailscale")
+                )
+            })
+            .expect("missing modal VPN dropdown node");
+        let vpn_msg = vpn_box
+            .node
+            .emit_select(2)
+            .expect("SelectModalVpn callback missing");
+        let _ = app.update(vpn_msg);
+        assert_eq!(
+            app.add_modal_state.selected_vpn,
+            VpnAdapterBinding::Tailscale
         );
     }
 }

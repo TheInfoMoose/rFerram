@@ -4,6 +4,8 @@
 //! trait implementation, and the primary shell views (`view_header`, `view_sidebar`, and
 //! `view_connection_grid`).
 
+use std::collections::HashMap;
+
 use cosmic::app::{Command, Core, Task};
 use cosmic::widget::{button, column, container, divider, grid, row, scrollable, text, text_input};
 use cosmic::{Application, Element};
@@ -12,7 +14,8 @@ use rferram_common::{ConnectionProfile, RuntimeEnvironment};
 use rferram_protocol::WireMessage;
 
 use crate::{
-    AddDesktopModalState, AddDesktopModalTab, HelpSection, SettingsSection, VpnAdapterBinding,
+    AddDesktopModalState, AddDesktopModalTab, HelpSection, SessionConnectOutcome, SettingsSection,
+    UiSessionController, VpnAdapterBinding,
 };
 
 /// Main Navigation Sidebar Item
@@ -63,6 +66,9 @@ pub struct RFerramApp {
     pub active_settings_section: SettingsSection,
     pub diagnostics_drawer_open: bool,
     pub active_help_section: HelpSection,
+    pub persistence_config: Option<cosmic_config::Config>,
+    pub session_controller: UiSessionController,
+    pub session_statuses: HashMap<String, String>,
 }
 
 /// Messages Emitted across the Event Bus
@@ -195,9 +201,41 @@ impl RFerramApp {
             active_settings_section: SettingsSection::General,
             diagnostics_drawer_open: false,
             active_help_section: HelpSection::Documentation,
+            persistence_config: None,
+            session_controller: UiSessionController::new(),
+            session_statuses: HashMap::new(),
         };
 
         (app, Command::none())
+    }
+
+    /// Returns the most recent session status string recorded for `profile_id`.
+    pub fn session_status(&self, profile_id: &str) -> Option<&str> {
+        self.session_statuses.get(profile_id).map(String::as_str)
+    }
+
+    /// Attaches a `cosmic-config` store for automatic profile persistence and loads any
+    /// previously saved profiles from that store if present.
+    pub fn with_persistence_config(mut self, config: cosmic_config::Config) -> Self {
+        let _ = self.load_profiles_from_config(&config);
+        self.persistence_config = Some(config);
+        self
+    }
+
+    /// Sets or clears the optional `cosmic-config` store used to auto-persist profile mutations.
+    pub fn set_persistence_config(&mut self, config: Option<cosmic_config::Config>) {
+        self.persistence_config = config;
+    }
+
+    fn auto_persist_profiles(&self) {
+        if let Some(ref config) = self.persistence_config
+            && let Err(err) = self.save_profiles_to_config(config)
+        {
+            tracing::warn!(
+                error = %err,
+                "Failed to auto-persist connection profiles to cosmic-config"
+            );
+        }
     }
 
     /// Saves all active `ConnectionProfile` entries and favorite profile IDs in `connection_cards` to `cosmic-config`.
@@ -325,15 +363,56 @@ impl RFerramApp {
                 };
                 self.connection_cards.push(new_profile);
                 self.add_modal_open = false;
+                self.auto_persist_profiles();
             }
             Message::ConnectSession(profile_id) => {
                 tracing::info!(
                     profile_id = %profile_id,
                     "Connecting to target host over QUIC transport"
                 );
+                self.session_statuses
+                    .insert(profile_id.clone(), String::from("Connecting"));
+                if let Some(card) = self
+                    .connection_cards
+                    .iter()
+                    .find(|c| c.profile.id == profile_id)
+                {
+                    let profile = card.profile.clone();
+                    let vpn_binding = card.vpn_binding.clone();
+                    return self
+                        .session_controller
+                        .spawn_connect_task(profile, vpn_binding);
+                }
+                let controller = self.session_controller.clone();
+                return Task::perform(
+                    async move {
+                        let status = String::from("Failed: Profile not found");
+                        controller.record_failed_status(&profile_id, &status);
+                        SessionConnectOutcome::failed(profile_id, status)
+                    },
+                    SessionConnectOutcome::into_message,
+                );
+            }
+            Message::DuplicateConnection(profile_id) => {
+                if let Some(existing) = self
+                    .connection_cards
+                    .iter()
+                    .find(|c| c.profile.id == profile_id)
+                    .cloned()
+                {
+                    let mut duplicated = existing;
+                    duplicated.profile.id = uuid::Uuid::new_v4().to_string();
+                    duplicated.profile.friendly_name =
+                        format!("{} (Copy)", duplicated.profile.friendly_name);
+                    self.connection_cards.push(duplicated);
+                    self.auto_persist_profiles();
+                }
             }
             Message::DeleteConnection(profile_id) => {
+                self.session_controller.disconnect_profile(&profile_id);
+                self.session_statuses.remove(&profile_id);
                 self.connection_cards.retain(|c| c.profile.id != profile_id);
+                self.auto_persist_profiles();
             }
             Message::ToggleFavorite(profile_id) => {
                 if let Some(card) = self
@@ -342,6 +421,7 @@ impl RFerramApp {
                     .find(|c| c.profile.id == profile_id)
                 {
                     card.is_favorite = !card.is_favorite;
+                    self.auto_persist_profiles();
                 }
             }
             Message::OpenSettingsDrawer => {
@@ -362,7 +442,57 @@ impl RFerramApp {
             Message::SelectHelpSection(sec) => {
                 self.active_help_section = sec;
             }
-            _ => {}
+            Message::WireMessageReceived { profile_id, msg } => {
+                let snapshot = self
+                    .session_controller
+                    .handle_wire_message(&profile_id, msg);
+                if let Some(ref snap) = snapshot {
+                    self.session_statuses
+                        .insert(profile_id.clone(), snap.status.clone());
+                }
+                if let Some(card) = self
+                    .connection_cards
+                    .iter_mut()
+                    .find(|c| c.profile.id == profile_id)
+                    && let Some(snap) = snapshot
+                {
+                    if snap.active_fps.is_some() {
+                        card.active_fps = snap.active_fps;
+                    }
+                    if snap.active_rtt_ms.is_some() {
+                        card.active_rtt_ms = snap.active_rtt_ms;
+                    }
+                }
+            }
+            Message::SessionStatusChanged { profile_id, status } => {
+                self.session_statuses
+                    .insert(profile_id.clone(), status.clone());
+                let snapshot = self.session_controller.refresh_telemetry(&profile_id);
+                if let Some(card) = self
+                    .connection_cards
+                    .iter_mut()
+                    .find(|c| c.profile.id == profile_id)
+                {
+                    if status.starts_with("Failed")
+                        || status.starts_with("Disconnected")
+                        || status.starts_with("Terminated")
+                    {
+                        card.active_fps = None;
+                        card.active_rtt_ms = None;
+                    } else if let Some(snap) = snapshot {
+                        card.active_fps = snap.active_fps;
+                        card.active_rtt_ms = snap.active_rtt_ms;
+                    } else if status.starts_with("Active") || status.starts_with("Connected") {
+                        if card.active_fps.is_none() {
+                            card.active_fps = Some(crate::DEFAULT_TARGET_FPS);
+                        }
+                        if card.active_rtt_ms.is_none() {
+                            card.active_rtt_ms = Some(1.0);
+                        }
+                    }
+                }
+            }
+            Message::ConfigureConnection(_) | Message::ExportConnection(_) => {}
         }
         Command::none()
     }
@@ -379,7 +509,9 @@ impl RFerramApp {
                     button(if self.is_grid_view { "Grid" } else { "List" })
                         .on_press(Message::ToggleViewMode)
                         .into(),
-                    text_input("Search connections...", &self.search_query).into(),
+                    text_input("Search connections...", &self.search_query)
+                        .on_input(Message::SearchChanged)
+                        .into(),
                     button("Settings")
                         .on_press(Message::OpenSettingsDrawer)
                         .into(),
@@ -598,5 +730,214 @@ mod tests {
 
         let header_grid_restored = app.view_header().collect_text();
         assert!(header_grid_restored.iter().any(|t| t == "Grid"));
+    }
+
+    #[test]
+    fn test_rferram_app_1440x900_rasterization_and_overlays() {
+        let (mut app, _) = RFerramApp::new(Core::new());
+
+        // 1. Render default RFerramApp shell at 1440x900 in Dark Theme
+        let base_scene = Application::view(&app).layout_scene(1440.0, 900.0);
+        assert_eq!(base_scene.width(), 1440);
+        assert_eq!(base_scene.height(), 900);
+        let dark_pixmap = base_scene.rasterize(&cosmic::Theme::dark());
+        assert_eq!(dark_pixmap.width(), 1440);
+        assert_eq!(dark_pixmap.height(), 900);
+        assert_eq!(dark_pixmap.data().len(), 1440 * 900 * 4);
+
+        // Verify cyan accent pixels (from cosmic::Theme::dark().accent_rgb) and text glyphs are painted
+        let dark_palette = cosmic::ThemePalette::from_theme(&cosmic::Theme::dark());
+        let has_accent_pixel = dark_pixmap.pixels().iter().any(|px| {
+            px.red() == dark_palette.accent[0]
+                && px.green() == dark_palette.accent[1]
+                && px.blue() == dark_palette.accent[2]
+        });
+        assert!(
+            has_accent_pixel,
+            "expected cyan accent pixels in 1440x900 dark render"
+        );
+
+        let has_text_pixel = dark_pixmap.pixels().iter().any(|px| {
+            px.red() == dark_palette.text_primary[0]
+                && px.green() == dark_palette.text_primary[1]
+                && px.blue() == dark_palette.text_primary[2]
+        });
+        assert!(
+            has_text_pixel,
+            "expected rendered ASCII text glyph pixels in 1440x900 render"
+        );
+
+        // 2. Render in Light Theme and verify distinct surface output
+        let light_pixmap = base_scene.rasterize(&cosmic::Theme::light());
+        assert_eq!(light_pixmap.width(), 1440);
+        assert_eq!(light_pixmap.height(), 900);
+        assert_ne!(dark_pixmap.data(), light_pixmap.data());
+
+        // 3. Open Add Desktop modal, Settings drawer, and Help drawer and rasterize at 1440x900
+        let _ = app.update(Message::OpenAddDesktopModal);
+        let _ = app.update(Message::UpdateModalHost("10.42.0.10:4433".to_string()));
+        let _ = app.update(Message::OpenSettingsDrawer);
+        let _ = app.update(Message::OpenDiagnosticsDrawer);
+
+        let overlay_view = Application::view(&app);
+        let overlay_scene = overlay_view
+            .layout_scene(1440.0, 900.0)
+            .with_caret_position(Some(8));
+        let overlay_pixmap = cosmic::rasterize_scene(&overlay_scene, &app.core.theme);
+        assert_eq!(overlay_pixmap.width(), 1440);
+        assert_eq!(overlay_pixmap.height(), 900);
+        assert_ne!(
+            overlay_pixmap.data(),
+            dark_pixmap.data(),
+            "frosted modal and drawer overlays must alter the 1440x900 framebuffer"
+        );
+
+        // Verify caret position on the modal's populated host input ("10.42.0.10:4433") alters rendered pixels
+        let overlay_caret_0 = overlay_view
+            .layout_scene(1440.0, 900.0)
+            .with_caret_position(Some(0))
+            .rasterize(&app.core.theme);
+        assert_ne!(
+            overlay_pixmap.data(),
+            overlay_caret_0.data(),
+            "moving caret position on focused modal host input must shift rendered caret bar"
+        );
+
+        // 4. Populate 24 connection profiles so the scrollable connection grid overflows 900px height
+        let _ = app.update(Message::CloseAddDesktopModal);
+        let _ = app.update(Message::CloseSettingsDrawer);
+        let _ = app.update(Message::CloseDiagnosticsDrawer);
+        for idx in 0..24 {
+            app.connection_cards.push(ProfileUiState {
+                profile: ConnectionProfile {
+                    id: format!("prof-overflow-{idx}"),
+                    friendly_name: format!("Overflow Node {idx}"),
+                    host_address: format!("10.99.0.{idx}:4433"),
+                    group_name: String::from("Group 1"),
+                    vpn_binding: Some(String::from("wg0")),
+                    ..Default::default()
+                },
+                is_favorite: idx % 2 == 0,
+                vpn_binding: VpnAdapterBinding::WireGuard(String::from("wg0")),
+                active_fps: Some(60.0),
+                active_rtt_ms: Some(4.2),
+            });
+        }
+
+        // Verify rasterize_application helper renders the overflowing scrollable grid cleanly at 1440x900
+        let app_pixmap = cosmic::rasterize_application(&app, 1440, 900);
+        assert_eq!(app_pixmap.width(), 1440);
+        assert_eq!(app_pixmap.height(), 900);
+        assert_ne!(app_pixmap.data(), dark_pixmap.data());
+    }
+
+    #[test]
+    fn test_rferram_app_runner_interactive_workflow() {
+        let mut runner =
+            cosmic::CosmicAppRunner::<RFerramApp>::headless(cosmic::app::Settings::default(), ());
+        assert_eq!(runner.viewport_size(), (1440, 900));
+        assert_eq!(runner.app.connection_cards.len(), 2);
+
+        // 1. Focus the background header search bar, then click "+" button to open the "Add Desktop" modal
+        let scene = runner.layout_scene();
+        let search_input = scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Search connections..."
+                )
+            })
+            .expect("missing header search input");
+        assert!(runner.handle_pointer_click(
+            search_input.x + 16.0,
+            search_input.y + search_input.height * 0.5,
+        ));
+        assert_eq!(runner.focused_widget_id, Some(search_input.id));
+
+        let plus_btn = scene
+            .boxes
+            .iter()
+            .find(|b| matches!(&b.node, cosmic::WidgetNode::Button { label, .. } if label == "+"))
+            .expect("missing '+' button");
+        assert!(runner.handle_pointer_click(
+            plus_btn.x + plus_btn.width * 0.5,
+            plus_btn.y + plus_btn.height * 0.5,
+        ));
+        assert!(runner.app.add_modal_open);
+        assert_eq!(runner.focused_widget_id, None);
+
+        // 2. Typing while modal is open (even before clicking a modal input) targets the modal's top-z host input, never the occluded background search bar
+        assert!(runner.handle_text_input("10.77.0.9:4433"));
+        assert_eq!(runner.app.search_query, "");
+        assert_eq!(runner.app.add_modal_state.host_input, "10.77.0.9:4433");
+
+        let modal_scene = runner.layout_scene();
+        let name_input = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Optional local only name"
+                )
+            })
+            .expect("missing modal friendly name input");
+        assert!(
+            runner
+                .handle_pointer_click(name_input.x + 16.0, name_input.y + name_input.height * 0.5,)
+        );
+        assert!(runner.handle_text_input("COSMIC Dev Host"));
+        assert_eq!(runner.app.add_modal_state.name_input, "COSMIC Dev Host");
+
+        // 3. Click the VPN dropdown in the modal to select WireGuard (index 1)
+        let modal_scene = runner.layout_scene();
+        let vpn_dropdown = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Dropdown { options, .. }
+                        if options.iter().any(|o| o == "WireGuard")
+                )
+            })
+            .expect("missing VPN dropdown");
+        assert!(runner.handle_pointer_click(
+            vpn_dropdown.x + vpn_dropdown.width * 0.5,
+            vpn_dropdown.y + vpn_dropdown.height * 0.5,
+        ));
+        assert_eq!(
+            runner.app.add_modal_state.selected_vpn,
+            VpnAdapterBinding::WireGuard("wg0".to_string())
+        );
+
+        // 4. Click "Add" button inside the modal to save the profile
+        let modal_scene = runner.layout_scene();
+        let add_btn = modal_scene
+            .boxes
+            .iter()
+            .find(|b| matches!(&b.node, cosmic::WidgetNode::Button { label, .. } if label == "Add"))
+            .expect("missing modal Add button");
+        assert!(runner.handle_pointer_click(
+            add_btn.x + add_btn.width * 0.5,
+            add_btn.y + add_btn.height * 0.5,
+        ));
+        assert!(!runner.app.add_modal_open);
+        assert_eq!(runner.app.connection_cards.len(), 3);
+        assert_eq!(
+            runner.app.connection_cards[2].profile.friendly_name,
+            "COSMIC Dev Host"
+        );
+
+        // 5. Resize and verify 256-byte row-aligned RGBA8 frame packing
+        assert!(runner.handle_resize(1280, 720));
+        let (aligned_buf, w, h, stride) = runner.pack_aligned_frame();
+        assert_eq!((w, h), (1280, 720));
+        assert_eq!(stride % cosmic::WGPU_ROW_ALIGNMENT, 0);
+        assert_eq!(aligned_buf.len(), (stride * 720) as usize);
     }
 }

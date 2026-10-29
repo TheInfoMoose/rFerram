@@ -8,11 +8,13 @@
 pub mod app;
 pub mod drawers;
 pub mod modal;
+pub mod session_controller;
 pub mod shader;
 
 pub use app::*;
 pub use drawers::*;
 pub use modal::*;
+pub use session_controller::*;
 pub use shader::*;
 
 use cosmic::Application;
@@ -200,6 +202,67 @@ mod tests {
         let empty_loaded =
             load_connection_profiles(&config).expect("loading empty profile slice failed");
         assert!(empty_loaded.is_empty());
+
+        cleanup_test_config(&config);
+    }
+
+    #[test]
+    fn test_auto_persistence_on_profile_mutations() {
+        let config = create_isolated_test_config("auto_persist");
+
+        // Default RFerramApp::new leaves persistence_config as None for deterministic unit tests
+        let (default_app, _) = RFerramApp::new(Core::new());
+        assert!(default_app.persistence_config.is_none());
+        assert_eq!(default_app.connection_cards.len(), 2);
+
+        // Attach config via with_persistence_config (empty config preserves default 2 profiles)
+        let mut app = default_app.with_persistence_config(config.clone());
+        assert!(app.persistence_config.is_some());
+        assert_eq!(app.connection_cards.len(), 2);
+
+        // 1. Add a profile via modal -> automatically persisted to cosmic-config
+        let _ = app.update(Message::OpenAddDesktopModal);
+        let _ = app.update(Message::UpdateModalName("Fedora COSMIC Host".to_string()));
+        let _ = app.update(Message::UpdateModalHost("10.66.0.8:4433".to_string()));
+        let _ = app.update(Message::SelectModalVpn(VpnAdapterBinding::Tailscale));
+        let _ = app.update(Message::SaveConnectionProfile);
+        assert_eq!(app.connection_cards.len(), 3);
+
+        let added_id = app.connection_cards[2].profile.id.clone();
+
+        // 2. Toggle favorite on the new profile -> automatically persisted
+        let _ = app.update(Message::ToggleFavorite(added_id.clone()));
+        assert!(app.connection_cards[2].is_favorite);
+
+        // 3. Duplicate the new profile -> automatically persisted
+        let _ = app.update(Message::DuplicateConnection(added_id));
+        assert_eq!(app.connection_cards.len(), 4);
+        assert_eq!(
+            app.connection_cards[3].profile.friendly_name,
+            "Fedora COSMIC Host (Copy)"
+        );
+
+        // 4. Delete prof-2 -> automatically persisted
+        let _ = app.update(Message::DeleteConnection("prof-2".to_string()));
+        assert_eq!(app.connection_cards.len(), 3);
+
+        // 5. Construct a brand new RFerramApp with_persistence_config and verify it loads the 3 auto-persisted cards
+        let (fresh_app, _) = RFerramApp::new(Core::new());
+        let restored = fresh_app.with_persistence_config(config.clone());
+        assert_eq!(restored.connection_cards.len(), 3);
+        assert_eq!(
+            restored.connection_cards[0].profile.friendly_name,
+            "macOS Workstation M3"
+        );
+        assert_eq!(
+            restored.connection_cards[1].profile.friendly_name,
+            "Fedora COSMIC Host"
+        );
+        assert!(restored.connection_cards[1].is_favorite);
+        assert_eq!(
+            restored.connection_cards[2].profile.friendly_name,
+            "Fedora COSMIC Host (Copy)"
+        );
 
         cleanup_test_config(&config);
     }

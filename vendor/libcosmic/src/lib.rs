@@ -7,8 +7,18 @@
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 pub use cosmic_config as config;
+
+pub mod layout;
+pub use layout::*;
+
+pub mod raster;
+pub use raster::*;
+
+pub mod runner;
+pub use runner::*;
 
 /// COSMIC Desktop Theme & Frosted Glass Surface Specification
 #[derive(Debug, Clone, PartialEq)]
@@ -141,10 +151,42 @@ pub mod app {
         pub fn is_empty(&self) -> bool {
             self.futures.is_empty()
         }
+
+        /// Consumes the [`Task`] and returns its boxed futures for execution by the runtime runner.
+        pub fn into_futures(
+            self,
+        ) -> Vec<Pin<Box<dyn Future<Output = Option<M>> + Send + 'static>>> {
+            self.futures
+        }
     }
 
     /// Backwards-compatible alias for `Task<M>`
     pub type Command<M> = Task<M>;
+
+    /// Launches a native desktop window and runs the [`Application`] event loop.
+    pub fn run<A: Application>(settings: Settings, flags: A::Flags) -> Result<(), String> {
+        crate::runner::run::<A>(settings, flags)
+    }
+}
+
+/// Shared callback invoked when a [`WidgetNode::TextInput`] text value is edited.
+#[derive(Clone)]
+pub struct TextInputCallback<M>(pub Arc<dyn Fn(String) -> M + Send + Sync>);
+
+impl<M> fmt::Debug for TextInputCallback<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("TextInputCallback(..)")
+    }
+}
+
+/// Shared callback invoked when a [`WidgetNode::Dropdown`] option index is selected.
+#[derive(Clone)]
+pub struct DropdownCallback<M>(pub Arc<dyn Fn(usize) -> M + Send + Sync>);
+
+impl<M> fmt::Debug for DropdownCallback<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("DropdownCallback(..)")
+    }
 }
 
 /// Declarative UI Node Inspection & Rendering Representation (`cosmic::Element<'a, Message>`)
@@ -161,6 +203,7 @@ pub enum WidgetNode<M> {
     TextInput {
         placeholder: String,
         value: String,
+        on_input: Option<TextInputCallback<M>>,
     },
     Toggler {
         label: String,
@@ -170,6 +213,7 @@ pub enum WidgetNode<M> {
     Dropdown {
         options: Vec<String>,
         selected: Option<usize>,
+        on_select: Option<DropdownCallback<M>>,
     },
     Icon {
         name: String,
@@ -184,6 +228,9 @@ pub enum WidgetNode<M> {
         spacing: u16,
         children: Vec<WidgetNode<M>>,
     },
+    Scrollable {
+        child: Box<WidgetNode<M>>,
+    },
     Column {
         spacing: u16,
         children: Vec<WidgetNode<M>>,
@@ -193,9 +240,35 @@ pub enum WidgetNode<M> {
         spacing: u16,
         children: Vec<WidgetNode<M>>,
     },
-    Scrollable {
-        child: Box<WidgetNode<M>>,
-    },
+}
+
+impl<M> WidgetNode<M> {
+    /// Invokes the attached `on_input` callback if this node is a `TextInput`.
+    pub fn emit_input(&self, value: impl Into<String>) -> Option<M> {
+        if let Self::TextInput {
+            on_input: Some(cb), ..
+        } = self
+        {
+            Some((cb.0)(value.into()))
+        } else {
+            None
+        }
+    }
+
+    /// Invokes the attached `on_select` callback if this node is a `Dropdown` and `index < options.len()`.
+    pub fn emit_select(&self, index: usize) -> Option<M> {
+        if let Self::Dropdown {
+            options,
+            on_select: Some(cb),
+            ..
+        } = self
+            && index < options.len()
+        {
+            Some((cb.0)(index))
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -212,11 +285,63 @@ impl<'a, M: Clone> Element<'a, M> {
         }
     }
 
+    /// Attaches a text input callback (`Fn(String) -> M`) if this element is a `TextInput`.
+    pub fn on_input<F>(mut self, f: F) -> Self
+    where
+        F: Fn(String) -> M + Send + Sync + 'static,
+    {
+        if let WidgetNode::TextInput { on_input, .. } = &mut self.node {
+            *on_input = Some(TextInputCallback(Arc::new(f)));
+        }
+        self
+    }
+
+    /// Attaches a selection callback (`Fn(usize) -> M`) if this element is a `Dropdown`.
+    pub fn on_select<F>(mut self, f: F) -> Self
+    where
+        F: Fn(usize) -> M + Send + Sync + 'static,
+    {
+        if let WidgetNode::Dropdown { on_select, .. } = &mut self.node {
+            *on_select = Some(DropdownCallback(Arc::new(f)));
+        }
+        self
+    }
+
+    /// Invokes the attached `on_input` callback if this element is a `TextInput`.
+    pub fn emit_input(&self, value: impl Into<String>) -> Option<M> {
+        self.node.emit_input(value)
+    }
+
+    /// Invokes the attached `on_select` callback if this element is a `Dropdown` and `index < options.len()`.
+    pub fn emit_select(&self, index: usize) -> Option<M> {
+        self.node.emit_select(index)
+    }
+
     /// Collects all text labels in the element tree for deterministic UI testing and accessibility
     pub fn collect_text(&self) -> Vec<String> {
         let mut out = Vec::new();
         Self::walk_text(&self.node, &mut out);
         out
+    }
+
+    /// Computes positioned [`LayoutBox`] records for this element tree at `(viewport_width, viewport_height)`.
+    pub fn layout(&self, viewport_width: f32, viewport_height: f32) -> Vec<LayoutBox<M>> {
+        layout::compute_layout(self, viewport_width, viewport_height)
+    }
+
+    /// Computes a positioned [`LayoutScene`] for this element tree at `(viewport_width, viewport_height)`.
+    pub fn layout_scene(&self, viewport_width: f32, viewport_height: f32) -> LayoutScene<M> {
+        LayoutScene::from_element(self, viewport_width, viewport_height)
+    }
+
+    /// Rasterizes this element tree at `(viewport_width, viewport_height)` into an RGBA8 [`tiny_skia::Pixmap`] using `theme`.
+    pub fn rasterize(
+        &self,
+        viewport_width: u32,
+        viewport_height: u32,
+        theme: &Theme,
+    ) -> tiny_skia::Pixmap {
+        raster::rasterize_element(self, viewport_width, viewport_height, theme)
     }
 
     fn walk_text(node: &WidgetNode<M>, out: &mut Vec<String>) {
@@ -282,10 +407,42 @@ pub trait Application: Sized + 'static {
     fn dialog(&self) -> Option<Element<'_, Self::Message>> {
         None
     }
+
+    /// Optional hook invoked when a focused `TextInput` without a widget-level `on_input` callback changes.
+    fn on_text_input(
+        &mut self,
+        _widget_id: usize,
+        _placeholder: &str,
+        _value: String,
+    ) -> Option<Self::Message> {
+        None
+    }
+
+    /// Optional hook invoked when a `Dropdown` without a widget-level `on_select` callback changes.
+    fn on_dropdown_select(
+        &mut self,
+        _widget_id: usize,
+        _selected_index: usize,
+        _selected_option: &str,
+    ) -> Option<Self::Message> {
+        None
+    }
+
+    /// Optional hook invoked when a scroll wheel / touchpad scroll gesture occurs.
+    fn on_scroll(&mut self, _delta_x: f32, _delta_y: f32) -> Option<Self::Message> {
+        None
+    }
+
+    /// Optional hook invoked when the window viewport is resized.
+    fn on_resize(&mut self, _width: u32, _height: u32) -> Option<Self::Message> {
+        None
+    }
 }
 
 pub mod widget {
-    use super::{Element, WidgetNode};
+    use std::sync::Arc;
+
+    use super::{DropdownCallback, Element, TextInputCallback, WidgetNode};
 
     pub struct TextBuilder {
         content: String,
@@ -351,33 +508,47 @@ pub mod widget {
         }
     }
 
-    pub struct TextInputBuilder {
+    pub struct TextInputBuilder<M = ()> {
         placeholder: String,
         value: String,
+        on_input: Option<TextInputCallback<M>>,
     }
 
-    impl TextInputBuilder {
-        pub fn build<'a, M: Clone>(self) -> Element<'a, M> {
+    impl<M> TextInputBuilder<M> {
+        pub fn on_input<F>(mut self, f: F) -> Self
+        where
+            F: Fn(String) -> M + Send + Sync + 'static,
+        {
+            self.on_input = Some(TextInputCallback(Arc::new(f)));
+            self
+        }
+
+        pub fn build<'a>(self) -> Element<'a, M>
+        where
+            M: Clone,
+        {
             Element::new(WidgetNode::TextInput {
                 placeholder: self.placeholder,
                 value: self.value,
+                on_input: self.on_input,
             })
         }
     }
 
-    impl<'a, M: Clone> From<TextInputBuilder> for Element<'a, M> {
-        fn from(val: TextInputBuilder) -> Self {
+    impl<'a, M: Clone> From<TextInputBuilder<M>> for Element<'a, M> {
+        fn from(val: TextInputBuilder<M>) -> Self {
             val.build()
         }
     }
 
-    pub fn text_input(
+    pub fn text_input<M>(
         placeholder: impl Into<String>,
         value: impl Into<String>,
-    ) -> TextInputBuilder {
+    ) -> TextInputBuilder<M> {
         TextInputBuilder {
             placeholder: placeholder.into(),
             value: value.into(),
+            on_input: None,
         }
     }
 
@@ -394,7 +565,26 @@ pub mod widget {
     }
 
     pub fn dropdown<'a, M: Clone>(options: Vec<String>, selected: Option<usize>) -> Element<'a, M> {
-        Element::new(WidgetNode::Dropdown { options, selected })
+        Element::new(WidgetNode::Dropdown {
+            options,
+            selected,
+            on_select: None,
+        })
+    }
+
+    pub fn dropdown_with_select<'a, M: Clone, F>(
+        options: Vec<String>,
+        selected: Option<usize>,
+        on_select: F,
+    ) -> Element<'a, M>
+    where
+        F: Fn(usize) -> M + Send + Sync + 'static,
+    {
+        Element::new(WidgetNode::Dropdown {
+            options,
+            selected,
+            on_select: Some(DropdownCallback(Arc::new(on_select))),
+        })
     }
 
     pub fn icon<'a, M: Clone>(name: impl Into<String>, size: u16) -> Element<'a, M> {

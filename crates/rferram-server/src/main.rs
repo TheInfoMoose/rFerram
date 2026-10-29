@@ -4,7 +4,8 @@ use anyhow::Result;
 use rferram_net::{QuicServerListener, QuicTransportConfig};
 use rferram_server::RFerramHostDaemon;
 use std::net::SocketAddr;
-use tracing::info;
+use std::sync::Arc;
+use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,7 +17,10 @@ async fn main() -> Result<()> {
         .init();
 
     let backend = RFerramHostDaemon::auto_detect_backend();
-    let daemon = RFerramHostDaemon::new("rferram-host-node".to_string(), backend);
+    let daemon = Arc::new(RFerramHostDaemon::new(
+        "rferram-host-node".to_string(),
+        backend,
+    ));
 
     let bind_addr: SocketAddr = std::env::var("RFERRAM_BIND_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:4433".to_string())
@@ -34,10 +38,26 @@ async fn main() -> Result<()> {
     }
 
     while let Some(conn) = listener.accept().await {
-        info!(
-            remote = %conn.connection.remote_address(),
-            "Provisioned host session for remote viewer"
-        );
+        let remote = conn.connection.remote_address();
+        let daemon_clone = daemon.clone();
+        tokio::spawn(async move {
+            match daemon_clone.serve_connection(conn).await {
+                Ok(session) => {
+                    info!(
+                        %remote,
+                        session_id = %session.session_id,
+                        "Provisioned host session for remote viewer"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        %remote,
+                        error = %e,
+                        "Failed to serve incoming QUIC connection"
+                    );
+                }
+            }
+        });
     }
 
     Ok(())

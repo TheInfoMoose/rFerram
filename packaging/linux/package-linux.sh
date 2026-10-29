@@ -17,7 +17,7 @@ cd "${WORKSPACE_ROOT}"
 mkdir -p "${OUT_DIR}"
 OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 
-if [[ -f "target/${TARGET}/release/rferram-ui" ]]; then
+if [[ -f "target/${TARGET}/release/rferram-ui" && ( ! -f "target/release/rferram-ui" || "target/${TARGET}/release/rferram-ui" -nt "target/release/rferram-ui" ) ]]; then
     BIN_DIR="target/${TARGET}/release"
 elif [[ -f "target/release/rferram-ui" ]]; then
     BIN_DIR="target/release"
@@ -25,6 +25,7 @@ else
     echo "ERROR: Compiled binaries not found in target/${TARGET}/release or target/release" >&2
     exit 1
 fi
+echo "==> Packaging release binaries from: ${BIN_DIR}"
 
 case "${TARGET}" in
     x86_64-*)
