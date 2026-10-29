@@ -1267,10 +1267,16 @@ impl<A: Application> ApplicationHandler<A::Message> for CosmicAppRunner<A> {
         }
 
         let (width, height) = self.viewport_size();
+        let window_icon = self
+            .settings
+            .window_icon
+            .as_ref()
+            .and_then(|(rgba, w, h)| winit::window::Icon::from_rgba(rgba.clone(), *w, *h).ok());
         let attrs = WindowAttributes::default()
             .with_title(A::APP_ID)
             .with_inner_size(LogicalSize::new(width, height))
-            .with_decorations(self.settings.client_decorations);
+            .with_decorations(self.settings.client_decorations)
+            .with_window_icon(window_icon);
 
         match event_loop.create_window(attrs) {
             Ok(window) => {

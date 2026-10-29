@@ -1,5 +1,9 @@
 # rFerram
 
+<p align="center">
+  <img src="packaging/icons/rferram.png" alt="rFerram Stained-Glass Logo" width="160" height="160" />
+</p>
+
 > *Just like the iron framework that supports large stained-glass windows in stone architecture that is its namesake, Ferram supports a solid window comprised of numerous disparate pieces.*
 
 **rFerram** is a hyper-optimized, zero-copy, cross-platform remote display application built from the ground up in pure Rust. It is designed to replace legacy, TCP-bound remote desktop tools (such as VNC, Remmina, and traditional RDP) by eliminating head-of-line blocking, high CPU overhead, and proprietary cloud dependencies.
@@ -86,6 +90,23 @@ cargo build --workspace --release --locked
 The compiled binaries will be located in `target/release/`:
 * `rferram-ui`: The main COSMIC / cross-platform viewer application.
 * `rferram-server`: The elevated host daemon service.
+
+### Distribution Packaging
+
+Generate platform-native distribution bundles in `dist/`:
+
+* **Linux (`.tar.gz`, `.deb`, `.rpm`, `.AppImage`)**:
+  ```bash
+  bash packaging/linux/package-linux.sh 0.1.0 x86_64-unknown-linux-gnu dist
+  ```
+* **macOS (`.tar.gz`, `rFerram.app`, `.dmg`)**:
+  ```bash
+  bash packaging/macos/package-macos.sh 0.1.0 aarch64-apple-darwin dist
+  ```
+* **Windows (`.zip`, `.msi`)**:
+  ```powershell
+  pwsh packaging/windows/package-windows.ps1 -Version 0.1.0 -Target x86_64-pc-windows-msvc -OutDir dist
+  ```
 
 ---
 

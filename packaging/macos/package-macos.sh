@@ -14,7 +14,7 @@ cd "${WORKSPACE_ROOT}"
 mkdir -p "${OUT_DIR}"
 OUT_DIR="$(cd "${OUT_DIR}" && pwd)"
 
-if [[ -f "target/${TARGET}/release/rferram-ui" ]]; then
+if [[ -f "target/${TARGET}/release/rferram-ui" && ( ! -f "target/release/rferram-ui" || "target/${TARGET}/release/rferram-ui" -nt "target/release/rferram-ui" ) ]]; then
     BIN_DIR="target/${TARGET}/release"
 elif [[ -f "target/release/rferram-ui" ]]; then
     BIN_DIR="target/release"
@@ -22,6 +22,7 @@ else
     echo "ERROR: Compiled binaries not found in target/${TARGET}/release or target/release" >&2
     exit 1
 fi
+echo "==> Packaging release binaries from: ${BIN_DIR}"
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
@@ -57,7 +58,11 @@ sed "s/__VERSION__/${VERSION}/g" "packaging/macos/Info.plist" > "${APP_BUNDLE}/C
 if command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
     ICONSET_DIR="${WORK_DIR}/rFerram.iconset"
     mkdir -p "${ICONSET_DIR}"
-    SRC_ICON="packaging/icons/rferram.png"
+    if [[ -f "packaging/icons/rferram-1024.png" ]]; then
+        SRC_ICON="packaging/icons/rferram-1024.png"
+    else
+        SRC_ICON="packaging/icons/rferram.png"
+    fi
     sips -z 16 16     "${SRC_ICON}" --out "${ICONSET_DIR}/icon_16x16.png" >/dev/null
     sips -z 32 32     "${SRC_ICON}" --out "${ICONSET_DIR}/icon_16x16@2x.png" >/dev/null
     sips -z 32 32     "${SRC_ICON}" --out "${ICONSET_DIR}/icon_32x32.png" >/dev/null
@@ -69,6 +74,8 @@ if command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
     sips -z 512 512   "${SRC_ICON}" --out "${ICONSET_DIR}/icon_512x512.png" >/dev/null
     sips -z 1024 1024 "${SRC_ICON}" --out "${ICONSET_DIR}/icon_512x512@2x.png" >/dev/null
     iconutil -c icns "${ICONSET_DIR}" -o "${APP_BUNDLE}/Contents/Resources/rFerram.icns"
+elif [[ -f "packaging/icons/rferram.icns" ]]; then
+    install -m 0644 "packaging/icons/rferram.icns" "${APP_BUNDLE}/Contents/Resources/rFerram.icns"
 fi
 
 if command -v codesign >/dev/null 2>&1; then

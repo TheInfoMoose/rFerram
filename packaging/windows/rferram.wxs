@@ -13,6 +13,9 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <Icon Id="rFerramIcon" SourceFile="$(var.RootDir)\packaging\icons\rferram.ico" />
+    <Property Id="ARPPRODUCTICON" Value="rFerramIcon" />
+
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="rFerram" />
     </StandardDirectory>
@@ -29,6 +32,7 @@
             Directory="ApplicationProgramsFolder"
             Name="rFerram"
             Description="Zero-copy QUIC Remote Display Viewer"
+            Icon="rFerramIcon"
             WorkingDirectory="INSTALLFOLDER"
             Advertise="no" />
         </File>

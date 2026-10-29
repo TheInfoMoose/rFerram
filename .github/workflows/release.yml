@@ -149,7 +149,10 @@ jobs:
             libudev-dev \
             libxkbcommon-dev \
             libdbus-1-dev \
-            rpm
+            rpm \
+            squashfs-tools \
+            desktop-file-utils \
+            file
 
       - name: Install Stable Rust Toolchain (${{ matrix.target }})
         uses: dtolnay/rust-toolchain@stable
@@ -200,11 +203,15 @@ jobs:
             ./target/${{ matrix.target }}/release/rferram-ui
           fi
 
-      - name: Package Linux Release Artifacts (.tar.gz, .deb, .rpm)
+      - name: Package Linux Release Artifacts (.tar.gz, .deb, .rpm, .AppImage)
         if: matrix.platform == 'linux'
         shell: bash
         run: |
           bash packaging/linux/package-linux.sh "${{ steps.meta.outputs.version }}" "${{ matrix.target }}" dist
+          APPIMAGE_ARCH="${{ matrix.target }}"
+          APPIMAGE_ARCH="${APPIMAGE_ARCH%%-*}"
+          RFERRAM_SMOKE_TEST=1 "./dist/rFerram-${{ steps.meta.outputs.version }}-${APPIMAGE_ARCH}.AppImage"
+          RFERRAM_SMOKE_TEST=1 RFERRAM_BIND_ADDR=127.0.0.1:0 "./dist/rFerram-${{ steps.meta.outputs.version }}-${APPIMAGE_ARCH}.AppImage" --server
 
       - name: Package macOS Release Artifacts (.tar.gz, rFerram.app, .dmg)
         if: matrix.platform == 'macos'

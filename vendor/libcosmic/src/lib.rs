@@ -90,16 +90,24 @@ pub mod app {
         pub scale_factor: f32,
         pub theme: Theme,
         pub client_decorations: bool,
+        pub window_icon: Option<(Vec<u8>, u32, u32)>,
     }
 
     impl Default for Settings {
         fn default() -> Self {
+            let theme = Theme::dark();
+            let icon_pixmap = crate::raster::rasterize_themed_app_icon(64, &theme);
             Self {
                 width: 1440,
                 height: 900,
                 scale_factor: 1.0,
-                theme: Theme::dark(),
+                theme,
                 client_decorations: true,
+                window_icon: Some((
+                    icon_pixmap.data().to_vec(),
+                    icon_pixmap.width(),
+                    icon_pixmap.height(),
+                )),
             }
         }
     }

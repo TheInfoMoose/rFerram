@@ -23,13 +23,17 @@ $OutDirPath = (Resolve-Path $OutDir).Path
 $TargetBinDir = Join-Path $WorkspaceRoot "target\$Target\release"
 $DefaultBinDir = Join-Path $WorkspaceRoot "target\release"
 
-if (Test-Path (Join-Path $TargetBinDir "rferram-ui.exe")) {
+$TargetUiExe = Join-Path $TargetBinDir "rferram-ui.exe"
+$DefaultUiExe = Join-Path $DefaultBinDir "rferram-ui.exe"
+
+if ((Test-Path $TargetUiExe) -and ((-not (Test-Path $DefaultUiExe)) -or ((Get-Item $TargetUiExe).LastWriteTimeUtc -ge (Get-Item $DefaultUiExe).LastWriteTimeUtc))) {
     $BinDir = $TargetBinDir
-} elseif (Test-Path (Join-Path $DefaultBinDir "rferram-ui.exe")) {
+} elseif (Test-Path $DefaultUiExe) {
     $BinDir = $DefaultBinDir
 } else {
     throw "Compiled binaries (rferram-ui.exe / rferram-server.exe) not found in $TargetBinDir or $DefaultBinDir"
 }
+Write-Host "==> Packaging release binaries from: $BinDir"
 
 if ($Target -like "aarch64-*") {
     $WixArch = "arm64"
@@ -48,6 +52,7 @@ New-Item -ItemType Directory -Force -Path $StageDir | Out-Null
 
 Copy-Item (Join-Path $BinDir "rferram-ui.exe") -Destination $StageDir
 Copy-Item (Join-Path $BinDir "rferram-server.exe") -Destination $StageDir
+Copy-Item (Join-Path $WorkspaceRoot "packaging\icons\rferram.ico") -Destination $StageDir
 Copy-Item (Join-Path $WorkspaceRoot "README.md") -Destination $StageDir
 Copy-Item (Join-Path $WorkspaceRoot "LICENSE") -Destination $StageDir
 

@@ -7,7 +7,9 @@
 use std::collections::HashMap;
 
 use cosmic::app::{Command, Core, Task};
-use cosmic::widget::{button, column, container, divider, grid, row, scrollable, text, text_input};
+use cosmic::widget::{
+    button, column, container, divider, grid, icon, row, scrollable, text, text_input,
+};
 use cosmic::{Application, Element};
 
 use rferram_common::{ConnectionProfile, RuntimeEnvironment};
@@ -17,6 +19,9 @@ use crate::{
     AddDesktopModalState, AddDesktopModalTab, HelpSection, SessionConnectOutcome, SettingsSection,
     UiSessionController, VpnAdapterBinding,
 };
+
+/// Symbolic theme-adaptive icon identifier used in the application header bar.
+pub const APP_HEADER_ICON_NAME: &str = "com.theinfomoose.rFerram-symbolic";
 
 /// Main Navigation Sidebar Item
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -497,13 +502,14 @@ impl RFerramApp {
         Command::none()
     }
 
-    /// Top Header Bar (`Connections`, `+` Add/Import/Export, Grid/List toggle, Search, Settings gear, Help `?`)
+    /// Top Header Bar (Theme-adaptive `"rF"` emblem, `Connections`, `+` Add/Import/Export, Grid/List toggle, Search, Settings gear, Help `?`)
     pub fn view_header(&self) -> Element<'_, Message> {
         container(
             "rferram-header",
             row(
                 12,
                 vec![
+                    icon(APP_HEADER_ICON_NAME, 24),
                     text("Connections").size(18).into(),
                     button("+").on_press(Message::OpenAddDesktopModal).into(),
                     button(if self.is_grid_view { "Grid" } else { "List" })
@@ -939,5 +945,51 @@ mod tests {
         assert_eq!((w, h), (1280, 720));
         assert_eq!(stride % cosmic::WGPU_ROW_ALIGNMENT, 0);
         assert_eq!(aligned_buf.len(), (stride * 720) as usize);
+    }
+
+    #[test]
+    fn test_themed_header_and_window_icon_variants() {
+        let (app, _) = RFerramApp::new(Core::new());
+        let header_scene = app.view_header().layout_scene(1440.0, 900.0);
+        let has_symbolic_logo = header_scene.boxes.iter().any(|b| {
+            matches!(
+                &b.node,
+                cosmic::WidgetNode::Icon { name, size }
+                    if name == APP_HEADER_ICON_NAME && *size == 24
+            )
+        });
+        assert!(
+            has_symbolic_logo,
+            "expected symbolic theme-matched rFerram logo in view_header"
+        );
+
+        // Verify dark and light themes produce distinct theme-matched icons using the theme palette
+        let dark_icon = cosmic::rasterize_themed_app_icon(64, &cosmic::Theme::dark());
+        let light_icon = cosmic::rasterize_themed_app_icon(64, &cosmic::Theme::light());
+        assert_eq!((dark_icon.width(), dark_icon.height()), (64, 64));
+        assert_eq!((light_icon.width(), light_icon.height()), (64, 64));
+        assert_ne!(
+            dark_icon.data(),
+            light_icon.data(),
+            "embedded app logo must adapt to Dark vs Light theme rather than using a static full-color bitmap"
+        );
+
+        let dark_palette = cosmic::ThemePalette::from_theme(&cosmic::Theme::dark());
+        let has_dark_accent = dark_icon.pixels().iter().any(|px| {
+            px.red() == dark_palette.accent[0]
+                && px.green() == dark_palette.accent[1]
+                && px.blue() == dark_palette.accent[2]
+        });
+        assert!(
+            has_dark_accent,
+            "expected dark theme accent color in themed app icon"
+        );
+
+        let default_settings = cosmic::app::Settings::default();
+        let (rgba, w, h) = default_settings
+            .window_icon
+            .expect("Settings::default must provide a themed window_icon");
+        assert_eq!((w, h), (64, 64));
+        assert_eq!(rgba.len(), 64 * 64 * 4);
     }
 }

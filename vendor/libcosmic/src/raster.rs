@@ -703,6 +703,114 @@ fn paint_dropdown(
     }
 }
 
+/// Rasterizes the theme-matched rFerram stained-glass `"rF"` emblem into an RGBA8 [`Pixmap`]
+/// of dimensions `size x size` using the active [`Theme`] palette (never the full-color desktop icon).
+pub fn rasterize_themed_app_icon(size: u32, theme: &Theme) -> Pixmap {
+    let safe_size = size.max(16);
+    let mut pixmap = Pixmap::new(safe_size, safe_size).expect("icon size is >= 16x16");
+    let palette = ThemePalette::from_theme(theme);
+    let bounds = Rect::new(0.0, 0.0, safe_size as f32, safe_size as f32);
+    paint_rferram_themed_logo(&mut pixmap, bounds, palette, None);
+    pixmap
+}
+
+fn paint_rferram_themed_logo(
+    pixmap: &mut Pixmap,
+    bounds: Rect,
+    palette: ThemePalette,
+    mask: Option<&Mask>,
+) {
+    let icon_rect = inset_rect(bounds, 1.0);
+    let side = icon_rect.width.min(icon_rect.height).max(8.0);
+    let radius = (side * 0.22).clamp(3.0, 16.0);
+
+    // 1. Base surface matching the active theme's dark/light input surface
+    fill_rounded_rect_masked(pixmap, icon_rect, radius, palette.input_bg, mask);
+
+    // 2. Stained-glass facet panes tinted with the theme's muted accent & card surface
+    let half_w = icon_rect.width * 0.5;
+    let half_h = icon_rect.height * 0.5;
+    let top_left_pane = Rect::new(
+        icon_rect.x + 2.0,
+        icon_rect.y + 2.0,
+        (half_w - 2.0).max(2.0),
+        (half_h - 2.0).max(2.0),
+    );
+    let bottom_right_pane = Rect::new(
+        icon_rect.x + half_w,
+        icon_rect.y + half_h,
+        (half_w - 2.0).max(2.0),
+        (half_h - 2.0).max(2.0),
+    );
+    fill_rounded_rect_masked(
+        pixmap,
+        top_left_pane,
+        (radius * 0.6).max(2.0),
+        palette.accent_muted,
+        mask,
+    );
+    fill_rounded_rect_masked(
+        pixmap,
+        bottom_right_pane,
+        (radius * 0.6).max(2.0),
+        palette.card_bg,
+        mask,
+    );
+
+    // 3. Lead-came / iron framework lattice lines
+    let mut pb = PathBuilder::new();
+    let cx = icon_rect.x + half_w;
+    let cy = icon_rect.y + half_h;
+    pb.move_to(icon_rect.x + 2.0, cy);
+    pb.line_to(icon_rect.x + icon_rect.width - 2.0, cy);
+    pb.move_to(cx, icon_rect.y + 2.0);
+    pb.line_to(cx, icon_rect.y + icon_rect.height - 2.0);
+    pb.move_to(icon_rect.x + 4.0, icon_rect.y + 4.0);
+    pb.line_to(
+        icon_rect.x + icon_rect.width - 4.0,
+        icon_rect.y + icon_rect.height - 4.0,
+    );
+    if let Some(lattice_path) = pb.finish() {
+        let mut paint = Paint::default();
+        paint.set_color(to_skia_color(palette.divider));
+        paint.anti_alias = true;
+        let stroke = Stroke {
+            width: (side * 0.045).clamp(1.0, 2.5),
+            line_cap: LineCap::Round,
+            line_join: LineJoin::Round,
+            ..Default::default()
+        };
+        pixmap.stroke_path(&lattice_path, &paint, &stroke, Transform::identity(), mask);
+    }
+
+    // 4. Outer stained-glass iron frame in theme accent & border
+    stroke_rounded_rect_masked(
+        pixmap,
+        icon_rect,
+        radius,
+        (side * 0.065).clamp(1.2, 3.0),
+        palette.accent,
+        mask,
+    );
+
+    // 5. "rF" monogram rendered in theme accent / primary text color
+    let font_size = ((side * 0.42).round() as u16).max(10);
+    let label = "rF";
+    let text_w = measure_text_width(label, font_size);
+    let text_h = glyph_pixel_height(font_size);
+    let tx = icon_rect.x + ((icon_rect.width - text_w) * 0.5).max(1.0);
+    let ty = icon_rect.y + ((icon_rect.height - text_h) * 0.5).max(1.0);
+    draw_text(
+        pixmap,
+        label,
+        tx,
+        ty,
+        font_size,
+        palette.accent,
+        Some(icon_rect),
+    );
+}
+
 fn paint_icon(
     pixmap: &mut Pixmap,
     bounds: Rect,
@@ -711,6 +819,10 @@ fn paint_icon(
     palette: &ThemePalette,
     mask: Option<&Mask>,
 ) {
+    if name.contains("rFerram") || name.contains("rferram") {
+        paint_rferram_themed_logo(pixmap, bounds, *palette, mask);
+        return;
+    }
     let icon_rect = inset_rect(bounds, 2.0);
     if name.contains("folder") {
         // Draw folder tab + body
