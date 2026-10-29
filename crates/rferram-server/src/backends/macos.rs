@@ -310,7 +310,17 @@ impl MacOsScreenCaptureKitCapturer {
             };
 
             let available = shareable_cls.is_some() && stream_cls.is_some() && has_display;
-            (available, width, height, ("SCShareableContent", "SCStream"))
+            let (resolved_w, resolved_h) = if available {
+                (width, height)
+            } else {
+                (width.max(fallback_width), height.max(fallback_height))
+            };
+            (
+                available,
+                resolved_w,
+                resolved_h,
+                ("SCShareableContent", "SCStream"),
+            )
         }
         #[cfg(not(target_os = "macos"))]
         {

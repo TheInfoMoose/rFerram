@@ -861,7 +861,13 @@ mod tests {
                     ..EncoderConfig::default()
                 },
             );
-            assert_eq!(engine.capturer.lock().await.backend_type(), backend);
+            let (actual_backend, monitors) = {
+                let cap = engine.capturer.lock().await;
+                (cap.backend_type(), cap.enumerate_monitors().unwrap())
+            };
+            assert_eq!(actual_backend, backend);
+            assert!(monitors[0].width >= 1);
+            assert!(monitors[0].height >= 1);
 
             let (tx, mut rx) = mpsc::channel(16);
             engine.run_capture_loop(tx).await.unwrap();
@@ -873,8 +879,8 @@ mod tests {
 
             match msg {
                 WireMessage::Video(v) => {
-                    assert!(v.width >= 1920);
-                    assert!(v.height >= 1080);
+                    assert_eq!(v.width, monitors[0].width);
+                    assert_eq!(v.height, monitors[0].height);
                     assert!(v.is_keyframe);
                 }
                 WireMessage::Audio(a) => {

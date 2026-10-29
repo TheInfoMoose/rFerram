@@ -492,12 +492,17 @@ impl WindowsDxgiCapturer {
                     (false, false, 60)
                 };
                 if w > 0 && h > 0 {
+                    let (resolved_w, resolved_h) = if duplication_available {
+                        (w, h)
+                    } else {
+                        (w.max(fallback_width), h.max(fallback_height))
+                    };
                     return DxgiProbeOutcome {
                         duplication_available,
                         origin_x: coords.left,
                         origin_y: coords.top,
-                        width: w,
-                        height: h,
+                        width: resolved_w,
+                        height: resolved_h,
                         refresh_rate_hz: refresh_hz,
                         desktop_image_in_system_memory: sysmem,
                         interfaces_probed: ("IDXGIOutputDuplication", "ID3D11Texture2D"),

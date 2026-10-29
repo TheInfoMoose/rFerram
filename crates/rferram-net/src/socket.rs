@@ -8,7 +8,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use anyhow::{Context, Result};
 use socket2::{Domain, Protocol, Socket, Type};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Discovered VPN or Physical Network Interface Metadata
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +106,7 @@ impl VpnSocketFactory {
                 #[cfg(target_os = "linux")]
                 {
                     if let Err(e) = socket.bind_device(Some(if_name.as_bytes())) {
-                        warn!(
+                        tracing::warn!(
                             interface = %if_name,
                             error = %e,
                             "SO_BINDTODEVICE requires CAP_NET_RAW or root; falling back to interface IP binding"
