@@ -7,12 +7,66 @@
 //! widget IDs or cloned `Message` (`M`) values from `Button` and `Toggler` nodes.
 
 use taffy::prelude::{
-    AlignItems, AvailableSpace, Display, FlexDirection, NodeId, Position, Rect as TaffyRect, Size,
-    Style, TaffyTree, auto, fr, length, percent,
+    AlignItems, AlignSelf, AvailableSpace, Display, FlexDirection, JustifyContent, NodeId,
+    Position, Rect as TaffyRect, Size, Style, TaffyTree, auto, fr, length, percent,
 };
 use taffy::{Overflow, Point};
 
 use crate::{Element, WidgetNode};
+
+/// Container class name for the root application shell.
+pub const CLASS_ROOT_SHELL: &str = "rferram-root-shell";
+
+/// Container class name for the outer header wrapper.
+pub const CLASS_HEADER: &str = "rferram-header";
+
+/// Container class name for the upper window tab bar (`Connections` tab, `+`, Settings, Help).
+pub const CLASS_TOP_TABBAR: &str = "rferram-top-tabbar";
+
+/// Container class name for the second-tier action toolbar (`+`, segmented view/sort pills, search pill).
+pub const CLASS_TOOLBAR: &str = "rferram-toolbar";
+
+/// Container class name for a capsule-grouped segmented icon button pill (`Grid | List`, `Sort | Filter`).
+pub const CLASS_SEGMENTED_PILL: &str = "rferram-segmented-pill";
+
+/// Container class name for the rounded capsule search bar in the toolbar.
+pub const CLASS_SEARCH_PILL: &str = "rferram-search-pill";
+
+/// Container class name for the left navigation sidebar.
+pub const CLASS_SIDEBAR: &str = "rferram-sidebar";
+
+/// Container class name for a connection group section.
+pub const CLASS_GROUP_SECTION: &str = "rferram-group-section";
+
+/// Container class name for a raised group tab badge (`Group 1`).
+pub const CLASS_GROUP_BADGE: &str = "rferram-group-badge";
+
+/// Container class name for a portrait connection card with upper preview sheen and double border.
+pub const CLASS_CONNECTION_CARD: &str = "rferram-connection-card";
+
+/// Container class name for the floating card context menu popup (`Connect`, `Configure`, `Duplicate`, `Export`, `Delete`).
+pub const CLASS_CONTEXT_MENU: &str = "rferram-context-menu";
+
+/// Container class name for the floating `+` quick-action menu popup (`Add`, `Import`, `Export`).
+pub const CLASS_ADD_MENU: &str = "rferram-add-menu";
+
+/// Container class name for a horizontal `Label : Control` form row inside modals/drawers.
+pub const CLASS_FORM_ROW: &str = "rferram-form-row";
+
+/// Container class name for the segmented modal tab bar (`General | Display | Devices | Audio | Folders`).
+pub const CLASS_MODAL_TABS: &str = "rferram-modal-tabs";
+
+/// Container class name for the bordered inner tab content frame inside the "Add Desktop" modal.
+pub const CLASS_MODAL_TAB_FRAME: &str = "rferram-modal-tab-frame";
+
+/// Container class name for the bottom-right action footer (`Cancel | Add`) inside the modal.
+pub const CLASS_MODAL_FOOTER: &str = "rferram-modal-footer";
+
+/// Container class name for the left category navigation pane inside a split context drawer.
+pub const CLASS_DRAWER_NAV: &str = "rferram-drawer-nav";
+
+/// Container class name for the right detail content pane inside a split context drawer.
+pub const CLASS_DRAWER_CONTENT: &str = "rferram-drawer-content";
 
 /// Container class name for the "Add Desktop" modal overlay.
 pub const CLASS_ADD_DESKTOP_MODAL: &str = "rferram-add-desktop-modal";
@@ -168,17 +222,36 @@ pub struct HitTestResult<M> {
     pub node: WidgetNode<M>,
 }
 
-/// Returns `true` if `class` is one of the modal or context drawer overlay classes.
+/// Returns `true` if `class` is one of the modal, context drawer, or floating popup menu overlay classes.
 pub fn is_overlay_container_class(class: &str) -> bool {
     matches!(
         class,
-        CLASS_ADD_DESKTOP_MODAL | CLASS_SETTINGS_DRAWER | CLASS_HELP_DRAWER
+        CLASS_ADD_DESKTOP_MODAL
+            | CLASS_SETTINGS_DRAWER
+            | CLASS_HELP_DRAWER
+            | CLASS_CONTEXT_MENU
+            | CLASS_ADD_MENU
+    )
+}
+
+/// Returns `true` if `class` is a floating popup menu (`rferram-context-menu` or `rferram-add-menu`).
+pub fn is_popup_menu_class(class: &str) -> bool {
+    matches!(class, CLASS_CONTEXT_MENU | CLASS_ADD_MENU)
+}
+
+/// Returns `true` if `class` is a compact inline pill/badge container inside a toolbar or section header row.
+fn is_inline_container_class(class: &str) -> bool {
+    matches!(
+        class,
+        CLASS_SEGMENTED_PILL | CLASS_SEARCH_PILL | CLASS_GROUP_BADGE
     )
 }
 
 /// Returns the stacking `z_index` assigned to a container class (`0` for standard layout flow).
 pub fn overlay_z_index_for_class(class: &str) -> u32 {
     match class {
+        CLASS_ADD_MENU => 15,
+        CLASS_CONTEXT_MENU => 18,
         CLASS_SETTINGS_DRAWER => 20,
         CLASS_HELP_DRAWER => 25,
         CLASS_ADD_DESKTOP_MODAL => 30,
@@ -236,7 +309,7 @@ impl LayoutEngine {
         }
 
         let mut boxes = Vec::with_capacity(next_id);
-        self.collect_layout_boxes(&taffy, &root_meta, 0.0, 0.0, &mut boxes);
+        self.collect_layout_boxes(&taffy, &root_meta, 0.0, 0.0, None, &mut boxes);
         boxes
     }
 
@@ -275,13 +348,61 @@ impl LayoutEngine {
                     children: Vec::new(),
                 })
             }
-            WidgetNode::Button { label, .. } => {
-                let char_count = label.chars().count().max(1) as f32;
-                let est_width = (char_count * 8.5 + 24.0).max(40.0);
+            WidgetNode::Button {
+                label,
+                icon_name,
+                style: btn_style,
+                ..
+            } => {
+                let is_icon_only = icon_name
+                    .as_deref()
+                    .is_some_and(|ic| label.is_empty() || label == ic);
+                let icon_extra = if icon_name.is_some() && !is_icon_only {
+                    22.0
+                } else {
+                    0.0
+                };
+                let (est_width, est_height) = match btn_style {
+                    crate::ButtonStyle::Icon => (34.0_f32, 34.0_f32),
+                    crate::ButtonStyle::CardTrigger => {
+                        let chars = label.chars().count();
+                        if is_icon_only || chars <= 3 {
+                            (28.0_f32, 28.0_f32)
+                        } else {
+                            ((chars as f32 * 8.0 + 20.0 + icon_extra).max(32.0), 28.0_f32)
+                        }
+                    }
+                    crate::ButtonStyle::NavRow => {
+                        if is_icon_only {
+                            (120.0_f32, 34.0_f32)
+                        } else {
+                            let char_count = label.chars().count().max(1) as f32;
+                            ((char_count * 7.0 + 20.0 + icon_extra).max(120.0), 34.0_f32)
+                        }
+                    }
+                    crate::ButtonStyle::MenuItem => {
+                        if is_icon_only {
+                            (96.0_f32, 30.0_f32)
+                        } else {
+                            let char_count = label.chars().count().max(1) as f32;
+                            ((char_count * 7.5 + 20.0 + icon_extra).max(96.0), 30.0_f32)
+                        }
+                    }
+                    crate::ButtonStyle::Standard
+                    | crate::ButtonStyle::Primary
+                    | crate::ButtonStyle::Segmented => {
+                        if is_icon_only {
+                            (36.0_f32, 34.0_f32)
+                        } else {
+                            let char_count = label.chars().count().max(1) as f32;
+                            ((char_count * 8.5 + 24.0 + icon_extra).max(40.0), 34.0_f32)
+                        }
+                    }
+                };
                 let style = Style {
                     size: Size {
                         width: length(est_width),
-                        height: length(34.0_f32),
+                        height: length(est_height),
                     },
                     flex_shrink: 0.0,
                     ..Default::default()
@@ -371,7 +492,11 @@ impl LayoutEngine {
                 })
             }
             WidgetNode::Icon { size, .. } => {
-                let side = f32::from(*size).max(16.0);
+                let side = if *size == 0 {
+                    16.0
+                } else {
+                    f32::from(*size).max(1.0)
+                };
                 let style = Style {
                     size: Size {
                         width: length(side),
@@ -418,6 +543,7 @@ impl LayoutEngine {
                 let effective_z = inherited_z.max(class_z);
                 let child_meta =
                     self.build_taffy_subtree(taffy, child, next_id, effective_z, false)?;
+                self.adjust_container_child_style(taffy, class, &child_meta);
                 let mut style = self.style_for_container_class(class, is_root);
                 if !is_overlay_container_class(class) && node_contains_scrollable(child) {
                     style.flex_grow = 1.0;
@@ -447,7 +573,7 @@ impl LayoutEngine {
                 let style = Style {
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
-                    align_self: Some(taffy::prelude::AlignSelf::Stretch),
+                    align_self: Some(AlignSelf::Stretch),
                     flex_grow: 1.0,
                     flex_shrink: 1.0,
                     min_size: Size {
@@ -629,6 +755,197 @@ impl LayoutEngine {
         }
     }
 
+    fn adjust_container_child_style<M>(
+        &self,
+        taffy: &mut TaffyTree<()>,
+        class: &str,
+        child_meta: &NodeMeta<M>,
+    ) {
+        let child = &child_meta.node;
+        let child_taffy_id = child_meta.taffy_id;
+        let Ok(mut child_style) = taffy.style(child_taffy_id).cloned() else {
+            return;
+        };
+
+        match class {
+            CLASS_FORM_ROW => {
+                if matches!(child, WidgetNode::Row { .. }) {
+                    child_style.flex_grow = 1.0;
+                    child_style.size.width = percent(1.0_f32);
+                    child_style.align_items = Some(AlignItems::Center);
+                    child_style.justify_content = Some(JustifyContent::SpaceBetween);
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+
+                    if child_meta.children.len() >= 2
+                        && let Some(control_meta) = child_meta.children.last()
+                        && matches!(
+                            control_meta.node,
+                            WidgetNode::TextInput { .. } | WidgetNode::Dropdown { .. }
+                        )
+                        && let Ok(mut ctrl_style) = taffy.style(control_meta.taffy_id).cloned()
+                    {
+                        ctrl_style.flex_grow = 1.0;
+                        ctrl_style.flex_shrink = 1.0;
+                        ctrl_style.max_size.width =
+                            length(340.0_f32.min(self.viewport_width * 0.65));
+                        let _ = taffy.set_style(control_meta.taffy_id, ctrl_style);
+                    }
+                }
+            }
+            CLASS_MODAL_FOOTER => {
+                if matches!(child, WidgetNode::Row { .. }) {
+                    child_style.flex_grow = 1.0;
+                    child_style.size.width = percent(1.0_f32);
+                    child_style.align_items = Some(AlignItems::Center);
+                    child_style.justify_content = Some(JustifyContent::FlexEnd);
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+
+                    for btn_meta in &child_meta.children {
+                        if matches!(btn_meta.node, WidgetNode::Button { .. })
+                            && let Ok(mut btn_style) = taffy.style(btn_meta.taffy_id).cloned()
+                        {
+                            btn_style.min_size.width = length(68.0_f32);
+                            let _ = taffy.set_style(btn_meta.taffy_id, btn_style);
+                        }
+                    }
+                }
+            }
+            CLASS_MODAL_TABS => {
+                if matches!(child, WidgetNode::Row { .. }) {
+                    child_style.flex_grow = 1.0;
+                    child_style.size.width = percent(1.0_f32);
+                    child_style.align_items = Some(AlignItems::Center);
+                    child_style.justify_content = Some(JustifyContent::SpaceBetween);
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+
+                    for tab_meta in &child_meta.children {
+                        if matches!(tab_meta.node, WidgetNode::Button { .. })
+                            && let Ok(mut tab_style) = taffy.style(tab_meta.taffy_id).cloned()
+                        {
+                            tab_style.flex_grow = 1.0;
+                            tab_style.flex_shrink = 1.0;
+                            tab_style.flex_basis = length(0.0_f32);
+                            tab_style.size.width = auto();
+                            tab_style.min_size.width = length(48.0_f32);
+                            let _ = taffy.set_style(tab_meta.taffy_id, tab_style);
+                        }
+                    }
+                }
+            }
+            CLASS_TOP_TABBAR | CLASS_TOOLBAR => {
+                if matches!(child, WidgetNode::Row { .. }) {
+                    child_style.flex_grow = 1.0;
+                    child_style.size.width = percent(1.0_f32);
+                    child_style.align_items = Some(AlignItems::Center);
+                    if child_meta.children.len() == 2 {
+                        child_style.justify_content = Some(JustifyContent::SpaceBetween);
+                    }
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+
+                    if class == CLASS_TOP_TABBAR && child_meta.children.len() > 2 {
+                        // Push trailing settings/help buttons to the right edge of the top tabbar
+                        let right_anchor = child_meta
+                            .children
+                            .iter()
+                            .skip(1)
+                            .find(|gm| match &gm.node {
+                                WidgetNode::Button {
+                                    label, icon_name, ..
+                                } => {
+                                    label == "Settings"
+                                        || label == "?"
+                                        || label.contains("preferences-system")
+                                        || label.contains("help-browser")
+                                        || icon_name.as_deref().is_some_and(|ic| {
+                                            ic.contains("preferences-system")
+                                                || ic.contains("help-browser")
+                                        })
+                                }
+                                _ => false,
+                            })
+                            .or_else(|| child_meta.children.last());
+                        if let Some(anchor) = right_anchor
+                            && let Ok(mut s) = taffy.style(anchor.taffy_id).cloned()
+                        {
+                            s.margin.left = auto();
+                            let _ = taffy.set_style(anchor.taffy_id, s);
+                        }
+                    } else if class == CLASS_TOOLBAR && child_meta.children.len() >= 2 {
+                        // Push the search pill (or trailing search input) to the right edge of the toolbar
+                        let search_anchor = child_meta
+                            .children
+                            .iter()
+                            .find(|gm| {
+                                gm.class.as_deref() == Some(CLASS_SEARCH_PILL)
+                                    || matches!(gm.node, WidgetNode::TextInput { .. })
+                            })
+                            .or_else(|| child_meta.children.last());
+                        if let Some(anchor) = search_anchor
+                            && let Ok(mut s) = taffy.style(anchor.taffy_id).cloned()
+                        {
+                            s.margin.left = auto();
+                            let _ = taffy.set_style(anchor.taffy_id, s);
+                        }
+                    }
+                }
+            }
+            CLASS_SEGMENTED_PILL | CLASS_SEARCH_PILL | CLASS_GROUP_BADGE => {
+                if matches!(child, WidgetNode::Row { .. }) {
+                    child_style.align_items = Some(AlignItems::Center);
+                    child_style.justify_content = Some(JustifyContent::Center);
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+                }
+            }
+            CLASS_CONNECTION_CARD => {
+                if matches!(child, WidgetNode::Column { .. }) {
+                    child_style.flex_grow = 1.0;
+                    child_style.size.width = percent(1.0_f32);
+                    child_style.justify_content = Some(JustifyContent::SpaceBetween);
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+
+                    // Right-align the leading card trigger row (`...` and `*` buttons) in the top-right corner
+                    if let Some(first_row) = child_meta.children.first()
+                        && matches!(first_row.node, WidgetNode::Row { .. })
+                        && let Ok(mut row_style) = taffy.style(first_row.taffy_id).cloned()
+                    {
+                        row_style.size.width = percent(1.0_f32);
+                        row_style.justify_content = Some(JustifyContent::FlexEnd);
+                        let _ = taffy.set_style(first_row.taffy_id, row_style);
+                    }
+                }
+            }
+            CLASS_DRAWER_NAV | CLASS_SIDEBAR | CLASS_CONTEXT_MENU | CLASS_ADD_MENU => {
+                if matches!(child, WidgetNode::Column { .. }) {
+                    child_style.flex_grow = 1.0;
+                    child_style.size.width = percent(1.0_f32);
+                    child_style.align_items = Some(AlignItems::Stretch);
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+
+                    for item_meta in &child_meta.children {
+                        if matches!(item_meta.node, WidgetNode::Button { .. })
+                            && let Ok(mut item_style) = taffy.style(item_meta.taffy_id).cloned()
+                        {
+                            item_style.size.width = auto();
+                            item_style.align_self = Some(AlignSelf::Stretch);
+                            item_style.flex_shrink = 1.0;
+                            let _ = taffy.set_style(item_meta.taffy_id, item_style);
+                        }
+                    }
+                }
+            }
+            CLASS_SETTINGS_DRAWER | CLASS_HELP_DRAWER => {
+                if matches!(child, WidgetNode::Row { .. }) {
+                    child_style.flex_grow = 1.0;
+                    child_style.size.width = percent(1.0_f32);
+                    child_style.size.height = percent(1.0_f32);
+                    child_style.align_items = Some(AlignItems::Stretch);
+                    let _ = taffy.set_style(child_taffy_id, child_style);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn style_for_container_class(&self, class: &str, is_root: bool) -> Style {
         let pad = |p: f32| TaffyRect {
             left: length(p),
@@ -636,12 +953,18 @@ impl LayoutEngine {
             top: length(p),
             bottom: length(p),
         };
+        let pad_xy = |px: f32, py: f32| TaffyRect {
+            left: length(px),
+            right: length(px),
+            top: length(py),
+            bottom: length(py),
+        };
 
         match class {
             CLASS_ADD_DESKTOP_MODAL => {
                 let modal_w = 560.0_f32.min((self.viewport_width - 32.0).max(240.0));
                 let left_offset = ((self.viewport_width - modal_w) * 0.5).max(0.0);
-                let top_offset = (self.viewport_height * 0.1).max(24.0);
+                let top_offset = (self.viewport_height * 0.08).max(16.0);
                 Style {
                     display: Display::Flex,
                     flex_direction: FlexDirection::Column,
@@ -661,7 +984,7 @@ impl LayoutEngine {
                 }
             }
             CLASS_SETTINGS_DRAWER | CLASS_HELP_DRAWER => {
-                let drawer_w = 340.0_f32.min((self.viewport_width - 24.0).max(200.0));
+                let drawer_w = 540.0_f32.min((self.viewport_width - 24.0).max(200.0));
                 let left_offset = (self.viewport_width - drawer_w).max(0.0);
                 Style {
                     display: Display::Flex,
@@ -681,7 +1004,85 @@ impl LayoutEngine {
                     ..Default::default()
                 }
             }
-            "rferram-root-shell" => Style {
+            CLASS_CONTEXT_MENU => {
+                let menu_w = 156.0_f32.min((self.viewport_width - 12.0).max(96.0));
+                let left_offset = if is_root {
+                    0.0
+                } else {
+                    (self.viewport_width * 0.24)
+                        .clamp(8.0, (self.viewport_width - menu_w - 8.0).max(0.0))
+                };
+                let top_offset = if is_root {
+                    0.0
+                } else {
+                    176.0_f32.min((self.viewport_height - 180.0).max(0.0))
+                };
+                Style {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    position: if is_root {
+                        Position::Relative
+                    } else {
+                        Position::Absolute
+                    },
+                    inset: TaffyRect {
+                        left: length(left_offset),
+                        top: length(top_offset),
+                        right: auto(),
+                        bottom: auto(),
+                    },
+                    size: Size {
+                        width: length(menu_w),
+                        height: auto(),
+                    },
+                    min_size: Size {
+                        width: length(110.0_f32.min(menu_w)),
+                        height: length(44.0_f32),
+                    },
+                    padding: pad(6.0),
+                    ..Default::default()
+                }
+            }
+            CLASS_ADD_MENU => {
+                let menu_w = 140.0_f32.min((self.viewport_width - 12.0).max(96.0));
+                let left_offset = if is_root {
+                    0.0
+                } else {
+                    (self.viewport_width * 0.28)
+                        .clamp(8.0, (self.viewport_width - menu_w - 8.0).max(0.0))
+                };
+                let top_offset = if is_root {
+                    0.0
+                } else {
+                    84.0_f32.min((self.viewport_height - 130.0).max(0.0))
+                };
+                Style {
+                    display: Display::Flex,
+                    flex_direction: FlexDirection::Column,
+                    position: if is_root {
+                        Position::Relative
+                    } else {
+                        Position::Absolute
+                    },
+                    inset: TaffyRect {
+                        left: length(left_offset),
+                        top: length(top_offset),
+                        right: auto(),
+                        bottom: auto(),
+                    },
+                    size: Size {
+                        width: length(menu_w),
+                        height: auto(),
+                    },
+                    min_size: Size {
+                        width: length(104.0_f32.min(menu_w)),
+                        height: length(40.0_f32),
+                    },
+                    padding: pad(6.0),
+                    ..Default::default()
+                }
+            }
+            CLASS_ROOT_SHELL => Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 size: Size {
@@ -691,10 +1092,10 @@ impl LayoutEngine {
                 padding: pad(12.0),
                 ..Default::default()
             },
-            "rferram-header" => Style {
+            CLASS_HEADER => Style {
                 display: Display::Flex,
-                flex_direction: FlexDirection::Row,
-                align_items: Some(AlignItems::Center),
+                flex_direction: FlexDirection::Column,
+                justify_content: Some(JustifyContent::Center),
                 flex_shrink: 0.0,
                 size: Size {
                     width: percent(1.0_f32),
@@ -707,7 +1108,74 @@ impl LayoutEngine {
                 padding: pad(8.0),
                 ..Default::default()
             },
-            "rferram-sidebar" => Style {
+            CLASS_TOP_TABBAR => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::SpaceBetween),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: auto(),
+                    height: length(36.0_f32),
+                },
+                padding: pad_xy(10.0, 4.0),
+                ..Default::default()
+            },
+            CLASS_TOOLBAR => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::SpaceBetween),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: auto(),
+                    height: length(42.0_f32),
+                },
+                padding: pad_xy(10.0, 6.0),
+                ..Default::default()
+            },
+            CLASS_SEGMENTED_PILL => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: auto(),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: length(72.0_f32),
+                    height: length(36.0_f32),
+                },
+                padding: pad_xy(4.0, 2.0),
+                ..Default::default()
+            },
+            CLASS_SEARCH_PILL => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: auto(),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: length(200.0_f32.min(self.viewport_width)),
+                    height: length(36.0_f32),
+                },
+                padding: pad_xy(10.0, 2.0),
+                ..Default::default()
+            },
+            CLASS_SIDEBAR => Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 size: Size {
@@ -718,7 +1186,7 @@ impl LayoutEngine {
                 padding: pad(8.0),
                 ..Default::default()
             },
-            "rferram-group-section" => Style {
+            CLASS_GROUP_SECTION => Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
                 flex_grow: 1.0,
@@ -729,14 +1197,134 @@ impl LayoutEngine {
                 padding: pad(8.0),
                 ..Default::default()
             },
-            "rferram-connection-card" => Style {
+            CLASS_GROUP_BADGE => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                align_self: Some(AlignSelf::FlexStart),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: auto(),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: length(112.0_f32.min(self.viewport_width)),
+                    height: length(28.0_f32),
+                },
+                padding: pad_xy(14.0, 4.0),
+                ..Default::default()
+            },
+            CLASS_CONNECTION_CARD => Style {
                 display: Display::Flex,
                 flex_direction: FlexDirection::Column,
+                justify_content: Some(JustifyContent::SpaceBetween),
                 min_size: Size {
-                    width: length(220.0_f32),
-                    height: length(120.0_f32),
+                    width: length(200.0_f32.min(self.viewport_width)),
+                    height: length(240.0_f32.min(self.viewport_height)),
                 },
-                padding: pad(12.0),
+                max_size: Size {
+                    width: length(220.0_f32),
+                    height: auto(),
+                },
+                padding: pad(14.0),
+                ..Default::default()
+            },
+            CLASS_FORM_ROW => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::SpaceBetween),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: auto(),
+                    height: length(36.0_f32),
+                },
+                padding: pad_xy(6.0, 3.0),
+                ..Default::default()
+            },
+            CLASS_MODAL_TABS => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: auto(),
+                    height: length(36.0_f32),
+                },
+                padding: pad_xy(8.0, 3.0),
+                ..Default::default()
+            },
+            CLASS_MODAL_TAB_FRAME => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: auto(),
+                    height: length(180.0_f32.min(self.viewport_height)),
+                },
+                padding: pad(14.0),
+                ..Default::default()
+            },
+            CLASS_MODAL_FOOTER => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::FlexEnd),
+                flex_shrink: 0.0,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: auto(),
+                    height: length(40.0_f32),
+                },
+                padding: pad_xy(8.0, 4.0),
+                ..Default::default()
+            },
+            CLASS_DRAWER_NAV => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                flex_shrink: 0.0,
+                align_self: Some(AlignSelf::Stretch),
+                size: Size {
+                    width: length(200.0_f32.min(self.viewport_width)),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: length(160.0_f32.min(self.viewport_width)),
+                    height: length(180.0_f32.min(self.viewport_height)),
+                },
+                padding: pad(10.0),
+                ..Default::default()
+            },
+            CLASS_DRAWER_CONTENT => Style {
+                display: Display::Flex,
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                align_self: Some(AlignSelf::Stretch),
+                size: Size {
+                    width: auto(),
+                    height: auto(),
+                },
+                min_size: Size {
+                    width: length(180.0_f32.min(self.viewport_width)),
+                    height: length(180.0_f32.min(self.viewport_height)),
+                },
+                padding: pad(14.0),
                 ..Default::default()
             },
             _ => Style {
@@ -762,27 +1350,44 @@ impl LayoutEngine {
         meta: &NodeMeta<M>,
         parent_x: f32,
         parent_y: f32,
+        enclosing_class: Option<&str>,
         out: &mut Vec<LayoutBox<M>>,
     ) {
         let Ok(layout) = taffy.layout(meta.taffy_id) else {
             return;
         };
 
+        let width = layout.size.width;
         let is_overlay_root = meta
             .class
             .as_deref()
             .is_some_and(is_overlay_container_class);
-        let abs_x = if is_overlay_root {
-            layout.location.x
+        let is_popup_menu = meta.class.as_deref().is_some_and(is_popup_menu_class);
+
+        let is_nested_in_component = enclosing_class.is_some_and(|c| c != CLASS_ROOT_SHELL)
+            || parent_x > 24.0
+            || parent_y > 24.0;
+
+        let (abs_x, abs_y) = if is_popup_menu {
+            if meta.id == 0 {
+                (0.0, 0.0)
+            } else if is_nested_in_component {
+                // Anchored near the parent card or toolbar control
+                let max_x = (self.viewport_width - width - 8.0).max(0.0);
+                let max_y = (self.viewport_height - layout.size.height - 8.0).max(0.0);
+                (
+                    parent_x.clamp(8.0, max_x),
+                    (parent_y + 28.0).clamp(8.0, max_y),
+                )
+            } else {
+                (layout.location.x, layout.location.y)
+            }
+        } else if is_overlay_root {
+            (layout.location.x, layout.location.y)
         } else {
-            parent_x + layout.location.x
+            (parent_x + layout.location.x, parent_y + layout.location.y)
         };
-        let abs_y = if is_overlay_root {
-            layout.location.y
-        } else {
-            parent_y + layout.location.y
-        };
-        let width = layout.size.width;
+
         let height = if matches!(meta.node, WidgetNode::Scrollable { .. }) {
             let max_viewport_h = (self.viewport_height - abs_y).max(1.0);
             layout.size.height.min(max_viewport_h)
@@ -801,8 +1406,9 @@ impl LayoutEngine {
             node: meta.node.clone(),
         });
 
+        let child_enclosing = meta.class.as_deref().or(enclosing_class);
         for child in &meta.children {
-            self.collect_layout_boxes(taffy, child, abs_x, abs_y, out);
+            self.collect_layout_boxes(taffy, child, abs_x, abs_y, child_enclosing, out);
         }
     }
 }
@@ -872,14 +1478,12 @@ trait AlignItemsExt {
 
 impl AlignItemsExt for AlignItems {
     fn flex_start_or_center<M>(children: &[WidgetNode<M>]) -> AlignItems {
-        let has_structural_panel = children.iter().any(|c| {
-            matches!(
-                c,
-                WidgetNode::Container { .. }
-                    | WidgetNode::Scrollable { .. }
-                    | WidgetNode::Column { .. }
-                    | WidgetNode::Grid { .. }
-            )
+        let has_structural_panel = children.iter().any(|c| match c {
+            WidgetNode::Container { class, .. } => !is_inline_container_class(class),
+            WidgetNode::Scrollable { .. } | WidgetNode::Column { .. } | WidgetNode::Grid { .. } => {
+                true
+            }
+            _ => false,
         });
         if has_structural_panel {
             AlignItems::FlexStart
@@ -1117,8 +1721,13 @@ impl<M: Clone> LayoutScene<M> {
                 let overflow = (content_bottom - (bounds.y + bounds.height)).max(0.0);
                 if overflow > 0.0 {
                     let delta = clamped.min(overflow);
+                    let add_menu_z = overlay_z_index_for_class(CLASS_ADD_MENU);
+                    let ctx_menu_z = overlay_z_index_for_class(CLASS_CONTEXT_MENU);
                     for desc in &mut self.boxes[(idx + 1)..end] {
-                        if desc.z_index == scroll_z {
+                        if desc.z_index == scroll_z
+                            || desc.z_index == add_menu_z
+                            || desc.z_index == ctx_menu_z
+                        {
                             desc.y -= delta;
                         }
                     }
@@ -1446,5 +2055,575 @@ mod tests {
         let fx = footer_btn.x + footer_btn.width * 0.5;
         let fy = footer_btn.y + footer_btn.height * 0.5;
         assert_eq!(hit_test_message(&boxes, fx, fy), Some(TestMsg::SaveModal));
+    }
+
+    #[test]
+    fn test_two_tier_header_group_badge_portrait_cards_and_popup_menus_layout() {
+        use crate::widget::{ButtonStyle, icon_button, menu_button};
+
+        let tree: Element<'_, TestMsg> = container(
+            CLASS_ROOT_SHELL,
+            column(
+                10,
+                vec![
+                    container(
+                        CLASS_HEADER,
+                        column(
+                            6,
+                            vec![
+                                container(
+                                    CLASS_TOP_TABBAR,
+                                    row(
+                                        8,
+                                        vec![
+                                            row(
+                                                6,
+                                                vec![
+                                                    icon("com.theinfomoose.rFerram-symbolic", 20),
+                                                    text("Connections").size(16).into(),
+                                                ],
+                                            ),
+                                            row(
+                                                6,
+                                                vec![
+                                                    icon_button("preferences-system-symbolic")
+                                                        .into(),
+                                                    icon_button("help-browser-symbolic").into(),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                                container(
+                                    CLASS_TOOLBAR,
+                                    row(
+                                        10,
+                                        vec![
+                                            icon_button("add-symbolic")
+                                                .on_press(TestMsg::OpenModal)
+                                                .into(),
+                                            container(
+                                                CLASS_SEGMENTED_PILL,
+                                                row(
+                                                    4,
+                                                    vec![
+                                                        icon_button("view-grid-symbolic")
+                                                            .style(ButtonStyle::Segmented)
+                                                            .active(true)
+                                                            .into(),
+                                                        icon_button("view-list-symbolic")
+                                                            .style(ButtonStyle::Segmented)
+                                                            .into(),
+                                                    ],
+                                                ),
+                                            ),
+                                            container(
+                                                CLASS_SEARCH_PILL,
+                                                row(
+                                                    6,
+                                                    vec![
+                                                        text_input("Search connections...", "")
+                                                            .into(),
+                                                        icon("system-search-symbolic", 16),
+                                                    ],
+                                                ),
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                    container(
+                        CLASS_GROUP_SECTION,
+                        column(
+                            8,
+                            vec![
+                                container(CLASS_GROUP_BADGE, text("Group 1").size(14)),
+                                divider(),
+                                grid(
+                                    3,
+                                    16,
+                                    vec![container(
+                                        CLASS_CONNECTION_CARD,
+                                        column(
+                                            8,
+                                            vec![
+                                                row(
+                                                    4,
+                                                    vec![
+                                                        button("...")
+                                                            .style(ButtonStyle::CardTrigger)
+                                                            .into(),
+                                                        button("*")
+                                                            .style(ButtonStyle::CardTrigger)
+                                                            .into(),
+                                                    ],
+                                                ),
+                                                column(
+                                                    4,
+                                                    vec![
+                                                        text("Device Friendly Name (Local)")
+                                                            .size(14)
+                                                            .into(),
+                                                        text("Saved Profile").size(11).into(),
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                    )],
+                                ),
+                            ],
+                        ),
+                    ),
+                    container(
+                        CLASS_ADD_MENU,
+                        column(
+                            4,
+                            vec![
+                                menu_button("Add").on_press(TestMsg::OpenModal).into(),
+                                menu_button("Import").into(),
+                                menu_button("Export").into(),
+                            ],
+                        ),
+                    ),
+                    container(
+                        CLASS_CONTEXT_MENU,
+                        column(
+                            4,
+                            vec![
+                                menu_button("Connect")
+                                    .on_press(TestMsg::ConnectCard(1))
+                                    .into(),
+                                divider(),
+                                menu_button("Configure").into(),
+                                menu_button("Duplicate").into(),
+                                menu_button("Export").into(),
+                                menu_button("Delete").into(),
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        );
+
+        let boxes = compute_layout(&tree, 1440.0, 900.0);
+
+        let top_tabbar = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_TOP_TABBAR))
+            .expect("missing top tabbar");
+        let toolbar = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_TOOLBAR))
+            .expect("missing toolbar");
+        assert!(
+            toolbar.y >= top_tabbar.y + top_tabbar.height,
+            "toolbar must be stacked below top tabbar in two-tier header"
+        );
+
+        let seg_pill = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_SEGMENTED_PILL))
+            .expect("missing segmented pill");
+        let search_pill = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_SEARCH_PILL))
+            .expect("missing search pill");
+        assert!(
+            (seg_pill.y - search_pill.y).abs() <= 4.0,
+            "segmented pill and search pill must align horizontally in toolbar"
+        );
+        assert!(
+            search_pill.x > toolbar.x + toolbar.width * 0.5,
+            "search pill must be pushed to the right side of the toolbar: x={}",
+            search_pill.x
+        );
+
+        let group_badge = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_GROUP_BADGE))
+            .expect("missing group badge");
+        assert!(
+            group_badge.width >= 112.0 && group_badge.width < 260.0,
+            "group badge must remain a compact tab pill: width={}",
+            group_badge.width
+        );
+
+        let card = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_CONNECTION_CARD))
+            .expect("missing connection card");
+        assert!(
+            card.height > card.width,
+            "connection card must have portrait aspect ratio (height={} > width={})",
+            card.height,
+            card.width
+        );
+
+        // Card trigger buttons ("..." and "*") must be right-aligned in the top-right corner of the card
+        let dots_btn = boxes
+            .iter()
+            .find(|b| matches!(&b.node, WidgetNode::Button { label, .. } if label == "..."))
+            .expect("missing '...' card trigger button");
+        assert!(
+            dots_btn.x > card.x + card.width * 0.45,
+            "card trigger '...' must be right-aligned in the upper-right of the portrait card"
+        );
+
+        let add_menu = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_ADD_MENU))
+            .expect("missing add menu");
+        let ctx_menu = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_CONTEXT_MENU))
+            .expect("missing context menu");
+        assert!(add_menu.z_index > 0);
+        assert!(ctx_menu.z_index > add_menu.z_index);
+
+        let connect_item = boxes
+            .iter()
+            .find(|b| matches!(&b.node, WidgetNode::Button { label, .. } if label == "Connect"))
+            .expect("missing Connect menu item");
+        let configure_item = boxes
+            .iter()
+            .find(|b| matches!(&b.node, WidgetNode::Button { label, .. } if label == "Configure"))
+            .expect("missing Configure menu item");
+        assert!(
+            (connect_item.width - configure_item.width).abs() < 1.0,
+            "menu items inside context menu must stretch to uniform width"
+        );
+        assert_eq!(
+            hit_test_message(
+                &boxes,
+                connect_item.x + connect_item.width * 0.5,
+                connect_item.y + connect_item.height * 0.5
+            ),
+            Some(TestMsg::ConnectCard(1))
+        );
+    }
+
+    #[test]
+    fn test_modal_form_rows_tab_frame_footer_and_split_drawer_layout() {
+        use crate::widget::{checkbox, nav_button, segmented_button};
+
+        let tree: Element<'_, TestMsg> = container(
+            CLASS_ROOT_SHELL,
+            column(
+                10,
+                vec![
+                    container(
+                        CLASS_SETTINGS_DRAWER,
+                        row(
+                            12,
+                            vec![
+                                container(
+                                    CLASS_DRAWER_NAV,
+                                    column(
+                                        6,
+                                        vec![
+                                            nav_button("General")
+                                                .icon("preferences-system-symbolic")
+                                                .active(true)
+                                                .on_press(TestMsg::SelectDrawerItem)
+                                                .into(),
+                                            nav_button("Resolution | Scaling")
+                                                .icon("video-display-symbolic")
+                                                .into(),
+                                            nav_button("VPN").icon("network-vpn-symbolic").into(),
+                                        ],
+                                    ),
+                                ),
+                                container(
+                                    CLASS_DRAWER_CONTENT,
+                                    column(8, vec![text("Settings: General").size(16).into()]),
+                                ),
+                            ],
+                        ),
+                    ),
+                    container(
+                        CLASS_ADD_DESKTOP_MODAL,
+                        column(
+                            10,
+                            vec![
+                                text("Add Desktop").size(18).into(),
+                                container(
+                                    CLASS_FORM_ROW,
+                                    row(
+                                        10,
+                                        vec![
+                                            text("Connection:").into(),
+                                            text_input("Host name or IP address", "").into(),
+                                        ],
+                                    ),
+                                ),
+                                container(
+                                    CLASS_MODAL_TABS,
+                                    row(
+                                        6,
+                                        vec![
+                                            segmented_button("General").selected(true).into(),
+                                            segmented_button("Display").into(),
+                                            segmented_button("Devices | Audio").into(),
+                                            segmented_button("Folders").into(),
+                                        ],
+                                    ),
+                                ),
+                                container(
+                                    CLASS_MODAL_TAB_FRAME,
+                                    column(
+                                        8,
+                                        vec![
+                                            container(
+                                                CLASS_FORM_ROW,
+                                                row(
+                                                    10,
+                                                    vec![
+                                                        text("Friendly Name:").into(),
+                                                        text_input("Optional local only name", "")
+                                                            .into(),
+                                                    ],
+                                                ),
+                                            ),
+                                            checkbox(
+                                                "Reconnect if the session is dropped",
+                                                true,
+                                                TestMsg::ToggleReconnect(false),
+                                            ),
+                                        ],
+                                    ),
+                                ),
+                                container(
+                                    CLASS_MODAL_FOOTER,
+                                    row(
+                                        8,
+                                        vec![
+                                            button("Cancel").on_press(TestMsg::CancelModal).into(),
+                                            button("Add").on_press(TestMsg::SaveModal).into(),
+                                        ],
+                                    ),
+                                ),
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        );
+
+        let boxes = compute_layout(&tree, 1440.0, 900.0);
+
+        // 1. Verify two-pane split drawer layout and that long nav labels ("Resolution | Scaling") do not overflow CLASS_DRAWER_NAV
+        let drawer_nav = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_DRAWER_NAV))
+            .expect("missing drawer nav pane");
+        let drawer_content = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_DRAWER_CONTENT))
+            .expect("missing drawer content pane");
+        assert!(
+            drawer_content.x >= drawer_nav.x + drawer_nav.width,
+            "drawer content pane must sit to the right of drawer nav pane"
+        );
+        assert!(
+            drawer_content.width > drawer_nav.width,
+            "drawer content pane must expand wider than drawer nav pane"
+        );
+        let res_nav_btn = boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    WidgetNode::Button { label, .. } if label == "Resolution | Scaling"
+                )
+            })
+            .expect("missing Resolution | Scaling nav button");
+        assert!(
+            res_nav_btn.x + res_nav_btn.width <= drawer_nav.x + drawer_nav.width + 0.5,
+            "Resolution | Scaling nav button (right={}) must not overflow drawer nav (right={})",
+            res_nav_btn.x + res_nav_btn.width,
+            drawer_nav.x + drawer_nav.width
+        );
+
+        // 2. Verify inline modal form row places label on left and input on right
+        let conn_label = boxes
+            .iter()
+            .find(
+                |b| matches!(&b.node, WidgetNode::Text { content, .. } if content == "Connection:"),
+            )
+            .expect("missing Connection: label");
+        let host_input = boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Host name or IP address"
+                )
+            })
+            .expect("missing Host input");
+        assert!(
+            host_input.x > conn_label.x + conn_label.width,
+            "form row must position input to the right of its label"
+        );
+
+        // 3. Verify equal-width modal tabs, tab frame, and right-aligned modal footer
+        let modal_box = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_ADD_DESKTOP_MODAL))
+            .expect("missing modal");
+        let tabs_box = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_MODAL_TABS))
+            .expect("missing modal tabs");
+        let general_tab = boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    WidgetNode::Button {
+                        label,
+                        style: crate::ButtonStyle::Segmented,
+                        ..
+                    } if label == "General"
+                )
+            })
+            .expect("missing General tab");
+        let audio_tab = boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    WidgetNode::Button {
+                        label,
+                        style: crate::ButtonStyle::Segmented,
+                        ..
+                    } if label == "Devices | Audio"
+                )
+            })
+            .expect("missing Devices | Audio tab");
+        assert!(
+            (general_tab.width - audio_tab.width).abs() < 1.0,
+            "segmented tabs in CLASS_MODAL_TABS must divide tab bar into equal widths"
+        );
+
+        let frame_box = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_MODAL_TAB_FRAME))
+            .expect("missing modal tab frame");
+        let footer_box = boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_MODAL_FOOTER))
+            .expect("missing modal footer");
+        assert!(frame_box.y >= tabs_box.y + tabs_box.height * 0.5);
+        assert!(footer_box.y >= frame_box.y + frame_box.height);
+
+        let add_btn = boxes
+            .iter()
+            .find(|b| matches!(&b.node, WidgetNode::Button { label, .. } if label == "Add"))
+            .expect("missing Add button");
+        assert!(
+            add_btn.x > modal_box.x + modal_box.width * 0.5,
+            "Add button in modal footer must be right-aligned in the modal"
+        );
+    }
+
+    #[test]
+    fn test_nested_popup_menu_anchoring_and_scrollable_translation() {
+        use crate::widget::menu_button;
+
+        // 1. A context menu nested inside a card at (0, 0) must anchor to the card, not jump to viewport (345, 176)
+        let standalone_card: Element<'_, TestMsg> = container(
+            CLASS_CONNECTION_CARD,
+            column(
+                8,
+                vec![
+                    text("Device Friendly Name (Local)").into(),
+                    container(
+                        CLASS_CONTEXT_MENU,
+                        column(
+                            4,
+                            vec![
+                                menu_button("Connect")
+                                    .on_press(TestMsg::ConnectCard(0))
+                                    .into(),
+                            ],
+                        ),
+                    ),
+                ],
+            ),
+        );
+        let card_boxes = compute_layout(&standalone_card, 1440.0, 900.0);
+        let card_box = &card_boxes[0];
+        let nested_menu = card_boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_CONTEXT_MENU))
+            .expect("missing nested context menu");
+        assert!(
+            nested_menu.x >= card_box.x && nested_menu.x < card_box.x + card_box.width,
+            "nested context menu (x={}) must stay anchored to its parent card at x={}..{}",
+            nested_menu.x,
+            card_box.x,
+            card_box.x + card_box.width
+        );
+
+        // 2. When multiple cards are inside a Scrollable and scrolled, a nested context menu scrolls with its parent card
+        let mut cards: Vec<Element<'_, TestMsg>> = Vec::new();
+        for idx in 0..9 {
+            let mut card_children: Vec<Element<'_, TestMsg>> =
+                vec![text(format!("Card {idx}")).into()];
+            if idx == 4 {
+                card_children.push(container(
+                    CLASS_CONTEXT_MENU,
+                    column(
+                        4,
+                        vec![
+                            menu_button("Connect")
+                                .on_press(TestMsg::ConnectCard(idx))
+                                .into(),
+                        ],
+                    ),
+                ));
+            }
+            cards.push(container(CLASS_CONNECTION_CARD, column(8, card_children)));
+        }
+
+        let scroll_tree: Element<'_, TestMsg> = container(
+            CLASS_ROOT_SHELL,
+            column(10, vec![scrollable(grid(3, 16, cards))]),
+        );
+
+        let unscrolled = scroll_tree.layout_scene(1440.0, 500.0);
+        let menu_before = unscrolled
+            .boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_CONTEXT_MENU))
+            .expect("missing context menu before scroll")
+            .y;
+
+        let scrolled = unscrolled.with_scroll_offset(120.0);
+        let menu_after = scrolled
+            .boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(CLASS_CONTEXT_MENU))
+            .expect("missing context menu after scroll")
+            .y;
+        assert!(
+            (menu_before - menu_after - 120.0).abs() < 1.0,
+            "nested context menu inside Scrollable must translate with scroll_offset_y (before={menu_before}, after={menu_after})"
+        );
+        let connect_after = scrolled
+            .boxes
+            .iter()
+            .find(|b| matches!(&b.node, WidgetNode::Button { label, .. } if label == "Connect"))
+            .expect("missing Connect button after scroll");
+        assert_eq!(
+            scrolled.hit_test_message(
+                connect_after.x + connect_after.width * 0.5,
+                connect_after.y + connect_after.height * 0.5
+            ),
+            Some(TestMsg::ConnectCard(4))
+        );
     }
 }

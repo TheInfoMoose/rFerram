@@ -59,7 +59,7 @@ pub mod app {
     use super::*;
 
     /// Core state managed by the COSMIC runtime (`cosmic::app::Core`)
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub struct Core {
         pub window_width: u32,
         pub window_height: u32,
@@ -67,6 +67,12 @@ pub mod app {
         pub nav_bar_active: bool,
         pub show_context_drawer: bool,
         pub theme: Theme,
+    }
+
+    impl Default for Core {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl Core {
@@ -197,6 +203,27 @@ impl<M> fmt::Debug for DropdownCallback<M> {
     }
 }
 
+/// Visual and structural style variants for [`WidgetNode::Button`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ButtonStyle {
+    #[default]
+    Standard,
+    Primary,
+    Icon,
+    Segmented,
+    NavRow,
+    CardTrigger,
+    MenuItem,
+}
+
+/// Visual style variants for [`WidgetNode::Toggler`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TogglerStyle {
+    #[default]
+    Switch,
+    Checkbox,
+}
+
 /// Declarative UI Node Inspection & Rendering Representation (`cosmic::Element<'a, Message>`)
 #[derive(Debug, Clone)]
 pub enum WidgetNode<M> {
@@ -206,6 +233,9 @@ pub enum WidgetNode<M> {
     },
     Button {
         label: String,
+        icon_name: Option<String>,
+        style: ButtonStyle,
+        is_active: bool,
         on_press: Option<M>,
     },
     TextInput {
@@ -216,6 +246,7 @@ pub enum WidgetNode<M> {
     Toggler {
         label: String,
         is_checked: bool,
+        style: TogglerStyle,
         on_toggle: Option<M>,
     },
     Dropdown {
@@ -355,7 +386,19 @@ impl<'a, M: Clone> Element<'a, M> {
     fn walk_text(node: &WidgetNode<M>, out: &mut Vec<String>) {
         match node {
             WidgetNode::Text { content, .. } => out.push(content.clone()),
-            WidgetNode::Button { label, .. } => out.push(label.clone()),
+            WidgetNode::Button {
+                label, icon_name, ..
+            } => {
+                if !label.is_empty() {
+                    out.push(label.clone());
+                }
+                if let Some(icon) = icon_name
+                    && !icon.is_empty()
+                    && icon != label
+                {
+                    out.push(icon.clone());
+                }
+            }
             WidgetNode::TextInput {
                 placeholder, value, ..
             } => {
@@ -450,6 +493,7 @@ pub trait Application: Sized + 'static {
 pub mod widget {
     use std::sync::Arc;
 
+    pub use super::{ButtonStyle, TogglerStyle};
     use super::{DropdownCallback, Element, TextInputCallback, WidgetNode};
 
     pub struct TextBuilder {
@@ -485,8 +529,11 @@ pub mod widget {
     }
 
     pub struct ButtonBuilder<M> {
-        label: String,
-        on_press: Option<M>,
+        pub label: String,
+        pub icon_name: Option<String>,
+        pub style: ButtonStyle,
+        pub is_active: bool,
+        pub on_press: Option<M>,
     }
 
     impl<M: Clone> ButtonBuilder<M> {
@@ -495,9 +542,42 @@ pub mod widget {
             self
         }
 
+        pub fn on_press_maybe(mut self, msg: Option<M>) -> Self {
+            self.on_press = msg;
+            self
+        }
+
+        pub fn style(mut self, style: ButtonStyle) -> Self {
+            self.style = style;
+            self
+        }
+
+        pub fn icon(mut self, icon_name: impl Into<String>) -> Self {
+            self.icon_name = Some(icon_name.into());
+            self
+        }
+
+        pub fn label(mut self, label: impl Into<String>) -> Self {
+            self.label = label.into();
+            self
+        }
+
+        pub fn active(mut self, is_active: bool) -> Self {
+            self.is_active = is_active;
+            self
+        }
+
+        pub fn selected(mut self, is_selected: bool) -> Self {
+            self.is_active = is_selected;
+            self
+        }
+
         pub fn build<'a>(self) -> Element<'a, M> {
             Element::new(WidgetNode::Button {
                 label: self.label,
+                icon_name: self.icon_name,
+                style: self.style,
+                is_active: self.is_active,
                 on_press: self.on_press,
             })
         }
@@ -512,6 +592,54 @@ pub mod widget {
     pub fn button<M: Clone>(label: impl Into<String>) -> ButtonBuilder<M> {
         ButtonBuilder {
             label: label.into(),
+            icon_name: None,
+            style: ButtonStyle::Standard,
+            is_active: false,
+            on_press: None,
+        }
+    }
+
+    /// Creates an icon-styled button (`ButtonStyle::Icon`) referencing a symbolic icon name.
+    pub fn icon_button<M: Clone>(icon_name: impl Into<String>) -> ButtonBuilder<M> {
+        let name = icon_name.into();
+        ButtonBuilder {
+            label: name.clone(),
+            icon_name: Some(name),
+            style: ButtonStyle::Icon,
+            is_active: false,
+            on_press: None,
+        }
+    }
+
+    /// Creates a sidebar / drawer navigation row button (`ButtonStyle::NavRow`).
+    pub fn nav_button<M: Clone>(label: impl Into<String>) -> ButtonBuilder<M> {
+        ButtonBuilder {
+            label: label.into(),
+            icon_name: None,
+            style: ButtonStyle::NavRow,
+            is_active: false,
+            on_press: None,
+        }
+    }
+
+    /// Creates a segmented control / tab button (`ButtonStyle::Segmented`).
+    pub fn segmented_button<M: Clone>(label: impl Into<String>) -> ButtonBuilder<M> {
+        ButtonBuilder {
+            label: label.into(),
+            icon_name: None,
+            style: ButtonStyle::Segmented,
+            is_active: false,
+            on_press: None,
+        }
+    }
+
+    /// Creates a context menu / popup action item button (`ButtonStyle::MenuItem`).
+    pub fn menu_button<M: Clone>(label: impl Into<String>) -> ButtonBuilder<M> {
+        ButtonBuilder {
+            label: label.into(),
+            icon_name: None,
+            style: ButtonStyle::MenuItem,
+            is_active: false,
             on_press: None,
         }
     }
@@ -568,6 +696,21 @@ pub mod widget {
         Element::new(WidgetNode::Toggler {
             label: label.into(),
             is_checked,
+            style: TogglerStyle::Switch,
+            on_toggle: Some(on_toggle),
+        })
+    }
+
+    /// Creates a checkbox control (`TogglerStyle::Checkbox`) matching the COSMIC modal specification.
+    pub fn checkbox<'a, M: Clone>(
+        label: impl Into<String>,
+        is_checked: bool,
+        on_toggle: M,
+    ) -> Element<'a, M> {
+        Element::new(WidgetNode::Toggler {
+            label: label.into(),
+            is_checked,
+            style: TogglerStyle::Checkbox,
             on_toggle: Some(on_toggle),
         })
     }
@@ -594,6 +737,86 @@ pub mod widget {
             on_select: Some(DropdownCallback(Arc::new(on_select))),
         })
     }
+
+    /// Freedesktop / COSMIC Symbolic Icon Builder (`cosmic::widget::icon::from_name(...)`).
+    pub mod icon {
+        use super::{Element, WidgetNode};
+
+        /// Builder for a named symbolic or themed icon (`cosmic::widget::icon::from_name`).
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct IconBuilder {
+            pub name: String,
+            pub size: u16,
+            pub symbolic: bool,
+        }
+
+        impl IconBuilder {
+            /// Creates a new [`IconBuilder`] for the given Freedesktop icon name.
+            pub fn new(name: impl Into<String>) -> Self {
+                Self {
+                    name: name.into(),
+                    size: 16,
+                    symbolic: true,
+                }
+            }
+
+            /// Sets the target icon size in logical pixels.
+            pub fn size(mut self, size: u16) -> Self {
+                self.size = size;
+                self
+            }
+
+            /// Alias for [`Self::size`] matching `libcosmic` handle builders.
+            pub fn scale(mut self, size: u16) -> Self {
+                self.size = size;
+                self
+            }
+
+            /// Marks whether this icon is a monochrome/theme-tinted symbolic icon.
+            pub fn symbolic(mut self, symbolic: bool) -> Self {
+                self.symbolic = symbolic;
+                self
+            }
+
+            /// Identity finalizer for `libcosmic` `icon::from_name(..).size(..).icon()` chains.
+            pub fn icon(self) -> Self {
+                self
+            }
+
+            /// Builds the declarative [`Element`] for this icon.
+            pub fn build<'a, M: Clone>(self) -> Element<'a, M> {
+                Element::new(WidgetNode::Icon {
+                    name: self.name,
+                    size: self.size,
+                })
+            }
+        }
+
+        impl<'a, M: Clone> From<IconBuilder> for Element<'a, M> {
+            fn from(val: IconBuilder) -> Self {
+                val.build()
+            }
+        }
+
+        impl From<IconBuilder> for String {
+            fn from(val: IconBuilder) -> Self {
+                val.name
+            }
+        }
+
+        impl AsRef<str> for IconBuilder {
+            fn as_ref(&self) -> &str {
+                &self.name
+            }
+        }
+
+        /// Resolves a Freedesktop / COSMIC symbolic icon by name (`e.g. "add-symbolic"`).
+        pub fn from_name(name: impl Into<String>) -> IconBuilder {
+            IconBuilder::new(name)
+        }
+    }
+
+    pub use icon::IconBuilder;
 
     pub fn icon<'a, M: Clone>(name: impl Into<String>, size: u16) -> Element<'a, M> {
         Element::new(WidgetNode::Icon {

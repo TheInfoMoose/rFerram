@@ -5,7 +5,8 @@
 
 use cosmic::Element;
 use cosmic::widget::{
-    button, column, container, divider, dropdown, icon, row, text, text_input, toggler,
+    ButtonStyle, button, checkbox, column, container, divider, dropdown, icon, row,
+    segmented_button, text, text_input,
 };
 
 use crate::{Message, RFerramApp};
@@ -114,24 +115,43 @@ impl Default for AddDesktopModalState {
 }
 
 impl RFerramApp {
-    /// "Add Desktop" Modal Dialog matching the visual wireframe specification
+    /// "Add Desktop" Modal Dialog matching the visual wireframe specification (`rFerramLayout-PNG.drawio.png`
+    /// and `UI_Fix.md`): horizontal `rferram-form-row` input rows, segmented `rferram-modal-tabs` pill tab bar,
+    /// bordered `rferram-modal-tab-frame` inner container, square `cosmic::widget::checkbox` controls, and
+    /// right-aligned `rferram-modal-footer` (`Cancel` / `Add`).
     pub fn view_add_desktop_modal(&self) -> Element<'_, Message> {
-        let tab_bar_row = row(
-            8,
-            vec![
-                button("General")
-                    .on_press(Message::SelectAddModalTab(AddDesktopModalTab::General))
-                    .into(),
-                button("Display")
-                    .on_press(Message::SelectAddModalTab(AddDesktopModalTab::Display))
-                    .into(),
-                button("Devices | Audio")
-                    .on_press(Message::SelectAddModalTab(AddDesktopModalTab::DevicesAudio))
-                    .into(),
-                button("Folders")
-                    .on_press(Message::SelectAddModalTab(AddDesktopModalTab::Folders))
-                    .into(),
-            ],
+        let is_general = matches!(
+            self.add_modal_state.active_tab,
+            AddDesktopModalTab::General
+                | AddDesktopModalTab::Credentials
+                | AddDesktopModalTab::VpnSelect
+        );
+
+        let tab_bar_row = container(
+            cosmic::CLASS_MODAL_TABS,
+            row(
+                6,
+                vec![
+                    segmented_button("General")
+                        .selected(is_general)
+                        .on_press(Message::SelectAddModalTab(AddDesktopModalTab::General))
+                        .into(),
+                    segmented_button("Display")
+                        .selected(self.add_modal_state.active_tab == AddDesktopModalTab::Display)
+                        .on_press(Message::SelectAddModalTab(AddDesktopModalTab::Display))
+                        .into(),
+                    segmented_button("Devices | Audio")
+                        .selected(
+                            self.add_modal_state.active_tab == AddDesktopModalTab::DevicesAudio,
+                        )
+                        .on_press(Message::SelectAddModalTab(AddDesktopModalTab::DevicesAudio))
+                        .into(),
+                    segmented_button("Folders")
+                        .selected(self.add_modal_state.active_tab == AddDesktopModalTab::Folders)
+                        .on_press(Message::SelectAddModalTab(AddDesktopModalTab::Folders))
+                        .into(),
+                ],
+            ),
         );
 
         let selected_vpn_idx = match &self.add_modal_state.selected_vpn {
@@ -148,40 +168,68 @@ impl RFerramApp {
             | AddDesktopModalTab::VpnSelect => column(
                 8,
                 vec![
-                    text("Friendly Name:").into(),
-                    text_input("Optional local only name", &self.add_modal_state.name_input)
-                        .on_input(Message::UpdateModalName)
-                        .into(),
-                    text("Group:").into(),
-                    dropdown(vec![String::from("Group 1")], Some(0))
-                        .on_select(|_| Message::UpdateModalGroup(String::from("Group 1"))),
+                    container(
+                        cosmic::CLASS_FORM_ROW,
+                        row(
+                            10,
+                            vec![
+                                text("Friendly Name:").into(),
+                                text_input(
+                                    "Optional local only name",
+                                    &self.add_modal_state.name_input,
+                                )
+                                .on_input(Message::UpdateModalName)
+                                .into(),
+                            ],
+                        ),
+                    ),
+                    container(
+                        cosmic::CLASS_FORM_ROW,
+                        row(
+                            10,
+                            vec![
+                                text("Group:").into(),
+                                dropdown(vec![String::from("Group 1")], Some(0)).on_select(|_| {
+                                    Message::UpdateModalGroup(String::from("Group 1"))
+                                }),
+                            ],
+                        ),
+                    ),
                     divider(),
-                    text("VPN:").into(),
-                    dropdown(
-                        vec![
-                            String::from("None"),
-                            String::from("WireGuard"),
-                            String::from("Tailscale"),
-                            String::from("UniFi VPN"),
-                        ],
-                        Some(selected_vpn_idx),
-                    )
-                    .on_select(|idx| {
-                        let vpn = match idx {
-                            1 => VpnAdapterBinding::WireGuard(String::from("wg0")),
-                            2 => VpnAdapterBinding::Tailscale,
-                            3 => VpnAdapterBinding::UniFiVpn,
-                            _ => VpnAdapterBinding::Direct,
-                        };
-                        Message::SelectModalVpn(vpn)
-                    }),
+                    container(
+                        cosmic::CLASS_FORM_ROW,
+                        row(
+                            10,
+                            vec![
+                                text("VPN:").into(),
+                                dropdown(
+                                    vec![
+                                        String::from("None"),
+                                        String::from("WireGuard"),
+                                        String::from("Tailscale"),
+                                        String::from("UniFi VPN"),
+                                    ],
+                                    Some(selected_vpn_idx),
+                                )
+                                .on_select(|idx| {
+                                    let vpn = match idx {
+                                        1 => VpnAdapterBinding::WireGuard(String::from("wg0")),
+                                        2 => VpnAdapterBinding::Tailscale,
+                                        3 => VpnAdapterBinding::UniFiVpn,
+                                        _ => VpnAdapterBinding::Direct,
+                                    };
+                                    Message::SelectModalVpn(vpn)
+                                }),
+                            ],
+                        ),
+                    ),
                     divider(),
-                    toggler(
+                    checkbox(
                         "Reconnect if the session is dropped",
                         self.add_modal_state.auto_reconnect,
                         Message::ToggleAutoReconnect(!self.add_modal_state.auto_reconnect),
                     ),
-                    toggler(
+                    checkbox(
                         "Connect to an admin session",
                         self.add_modal_state.admin_session_takeover,
                         Message::ToggleAdminSession(!self.add_modal_state.admin_session_takeover),
@@ -190,27 +238,33 @@ impl RFerramApp {
             ),
             AddDesktopModalTab::Display => column(
                 8,
-                vec![
-                    text("Resolution | Scaling").into(),
-                    dropdown(
+                vec![container(
+                    cosmic::CLASS_FORM_ROW,
+                    row(
+                        10,
                         vec![
-                            String::from("Native (100%)"),
-                            String::from("HiDPI (150%)"),
-                            String::from("UltraHD (200%)"),
+                            text("Resolution | Scaling").into(),
+                            dropdown(
+                                vec![
+                                    String::from("Native (100%)"),
+                                    String::from("HiDPI (150%)"),
+                                    String::from("UltraHD (200%)"),
+                                ],
+                                Some(0),
+                            ),
                         ],
-                        Some(0),
                     ),
-                ],
+                )],
             ),
             AddDesktopModalTab::DevicesAudio => column(
                 8,
                 vec![
-                    toggler(
+                    checkbox(
                         "Stream Host Speaker Audio (PipeWire / WASAPI / CoreAudio)",
                         self.add_modal_state.enable_speaker_audio,
                         Message::SelectAddModalTab(AddDesktopModalTab::DevicesAudio),
                     ),
-                    toggler(
+                    checkbox(
                         "Enable Microphone Passthrough",
                         self.add_modal_state.enable_mic_passthrough,
                         Message::SelectAddModalTab(AddDesktopModalTab::DevicesAudio),
@@ -227,29 +281,52 @@ impl RFerramApp {
         };
 
         container(
-            "rferram-add-desktop-modal",
+            cosmic::CLASS_ADD_DESKTOP_MODAL,
             column(
                 10,
                 vec![
                     text("Add Desktop").size(18).into(),
-                    text("Connection:").into(),
-                    text_input("Host name or IP address", &self.add_modal_state.host_input)
-                        .on_input(Message::UpdateModalHost)
-                        .into(),
-                    text("Credentials:").into(),
-                    dropdown(vec![String::from("Ask when required")], Some(0)),
+                    container(
+                        cosmic::CLASS_FORM_ROW,
+                        row(
+                            10,
+                            vec![
+                                text("Connection:").into(),
+                                text_input(
+                                    "Host name or IP address",
+                                    &self.add_modal_state.host_input,
+                                )
+                                .on_input(Message::UpdateModalHost)
+                                .into(),
+                            ],
+                        ),
+                    ),
+                    container(
+                        cosmic::CLASS_FORM_ROW,
+                        row(
+                            10,
+                            vec![
+                                text("Credentials:").into(),
+                                dropdown(vec![String::from("Ask when required")], Some(0)),
+                            ],
+                        ),
+                    ),
                     tab_bar_row,
-                    tab_body,
-                    row(
-                        8,
-                        vec![
-                            button("Cancel")
-                                .on_press(Message::CloseAddDesktopModal)
-                                .into(),
-                            button("Add")
-                                .on_press(Message::SaveConnectionProfile)
-                                .into(),
-                        ],
+                    container(cosmic::CLASS_MODAL_TAB_FRAME, tab_body),
+                    container(
+                        cosmic::CLASS_MODAL_FOOTER,
+                        row(
+                            8,
+                            vec![
+                                button("Cancel")
+                                    .on_press(Message::CloseAddDesktopModal)
+                                    .into(),
+                                button("Add")
+                                    .style(ButtonStyle::Primary)
+                                    .on_press(Message::SaveConnectionProfile)
+                                    .into(),
+                            ],
+                        ),
                     ),
                 ],
             ),
@@ -484,6 +561,197 @@ mod tests {
         assert_eq!(
             app.add_modal_state.selected_vpn,
             VpnAdapterBinding::Tailscale
+        );
+    }
+
+    #[test]
+    fn test_add_desktop_modal_layout_rows_tabs_checkboxes_and_footer() {
+        let (mut app, _) = RFerramApp::new(Core::new());
+        let _ = app.update(Message::OpenAddDesktopModal);
+
+        let modal_scene = app.view_add_desktop_modal().layout_scene(1440.0, 900.0);
+
+        let modal_box = modal_scene
+            .boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(cosmic::CLASS_ADD_DESKTOP_MODAL))
+            .expect("missing rferram-add-desktop-modal container");
+
+        // 1. Verify horizontal form rows (rferram-form-row) position labels to the left of controls
+        let form_rows: Vec<_> = modal_scene
+            .boxes
+            .iter()
+            .filter(|b| b.class.as_deref() == Some(cosmic::CLASS_FORM_ROW))
+            .collect();
+        assert!(
+            form_rows.len() >= 5,
+            "expected at least 5 rferram-form-row containers in General tab view (found {})",
+            form_rows.len()
+        );
+
+        let conn_label = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Text { content, .. } if content == "Connection:"
+                )
+            })
+            .expect("missing Connection: label");
+        let host_input = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Host name or IP address"
+                )
+            })
+            .expect("missing Host input");
+        assert!(
+            host_input.x > conn_label.x + conn_label.width,
+            "Connection form row must place host_input (x={}) to the right of Connection: label (x={})",
+            host_input.x,
+            conn_label.x
+        );
+
+        let friendly_label = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Text { content, .. } if content == "Friendly Name:"
+                )
+            })
+            .expect("missing Friendly Name: label");
+        let name_input = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::TextInput { placeholder, .. }
+                        if placeholder == "Optional local only name"
+                )
+            })
+            .expect("missing Friendly Name input");
+        assert!(
+            name_input.x > friendly_label.x + friendly_label.width,
+            "Friendly Name form row must place name_input to the right of Friendly Name: label"
+        );
+
+        // 2. Verify segmented pill tabs (rferram-modal-tabs) divide width equally and highlight active tab
+        let tabs_box = modal_scene
+            .boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(cosmic::CLASS_MODAL_TABS))
+            .expect("missing rferram-modal-tabs container");
+        let general_tab = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Button {
+                        label,
+                        style: ButtonStyle::Segmented,
+                        is_active: true,
+                        ..
+                    } if label == "General"
+                )
+            })
+            .expect("missing active General Segmented tab button");
+        let audio_tab = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Button {
+                        label,
+                        style: ButtonStyle::Segmented,
+                        is_active: false,
+                        ..
+                    } if label == "Devices | Audio"
+                )
+            })
+            .expect("missing inactive Devices | Audio Segmented tab button");
+        assert!(
+            (general_tab.width - audio_tab.width).abs() < 1.0,
+            "segmented modal tabs must share equal width (General={}, Devices | Audio={})",
+            general_tab.width,
+            audio_tab.width
+        );
+
+        // 3. Verify bordered inner tab body container (rferram-modal-tab-frame) and square checkboxes
+        let tab_frame = modal_scene
+            .boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(cosmic::CLASS_MODAL_TAB_FRAME))
+            .expect("missing rferram-modal-tab-frame container");
+        assert!(tab_frame.y >= tabs_box.y + tabs_box.height);
+
+        let checkbox_nodes: Vec<_> = modal_scene
+            .boxes
+            .iter()
+            .filter(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Toggler {
+                        style: cosmic::TogglerStyle::Checkbox,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert_eq!(
+            checkbox_nodes.len(),
+            2,
+            "expected 2 square Checkbox controls in General tab"
+        );
+
+        // 4. Verify right-aligned Cancel/Add footer (rferram-modal-footer)
+        let footer_box = modal_scene
+            .boxes
+            .iter()
+            .find(|b| b.class.as_deref() == Some(cosmic::CLASS_MODAL_FOOTER))
+            .expect("missing rferram-modal-footer container");
+        assert!(footer_box.y >= tab_frame.y + tab_frame.height);
+
+        let cancel_btn = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Button { label, .. } if label == "Cancel"
+                )
+            })
+            .expect("missing Cancel button");
+        let add_btn = modal_scene
+            .boxes
+            .iter()
+            .find(|b| {
+                matches!(
+                    &b.node,
+                    cosmic::WidgetNode::Button {
+                        label,
+                        style: ButtonStyle::Primary,
+                        ..
+                    } if label == "Add"
+                )
+            })
+            .expect("missing Primary Add button");
+        assert!(
+            cancel_btn.x > modal_box.x + modal_box.width * 0.45 && add_btn.x > cancel_btn.x,
+            "Cancel and Add buttons in rferram-modal-footer must be right-aligned (cancel_x={}, add_x={}, modal_x={}, modal_w={})",
+            cancel_btn.x,
+            add_btn.x,
+            modal_box.x,
+            modal_box.width
         );
     }
 }

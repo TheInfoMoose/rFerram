@@ -1231,6 +1231,15 @@ impl<A: Application> CosmicAppRunner<A> {
             self.dispatch_message(msg);
         }
 
+        if self.scroll_offset_y > 0.0 {
+            let max_scroll = {
+                let (w, h) = self.viewport_size();
+                let view = self.app.view();
+                LayoutScene::from_element(&view, w as f32, h as f32).max_scroll_offset()
+            };
+            self.scroll_offset_y = self.scroll_offset_y.clamp(0.0, max_scroll);
+        }
+
         self.needs_redraw = true;
         true
     }
@@ -1650,6 +1659,7 @@ mod tests {
                 scale_factor: 1.0,
                 theme: Theme::dark(),
                 client_decorations: true,
+                window_icon: None,
             },
             "boot-flag-ok",
         );
@@ -1818,6 +1828,7 @@ mod tests {
                 scale_factor: 1.0,
                 theme: Theme::dark(),
                 client_decorations: true,
+                window_icon: None,
             },
             "wgpu-test",
         );

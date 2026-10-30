@@ -16,8 +16,12 @@ pub use tiny_skia::{
 use tiny_skia::{FillRule, LineCap, LineJoin, Stroke, Transform};
 
 use crate::layout::{
-    CLASS_ADD_DESKTOP_MODAL, LayoutBox, LayoutScene, Rect, compute_clip_rects,
-    is_overlay_container_class, widget_subtree_count,
+    CLASS_ADD_DESKTOP_MODAL, CLASS_ADD_MENU, CLASS_CONNECTION_CARD, CLASS_CONTEXT_MENU,
+    CLASS_DRAWER_CONTENT, CLASS_DRAWER_NAV, CLASS_FORM_ROW, CLASS_GROUP_BADGE, CLASS_GROUP_SECTION,
+    CLASS_HEADER, CLASS_MODAL_FOOTER, CLASS_MODAL_TAB_FRAME, CLASS_MODAL_TABS, CLASS_ROOT_SHELL,
+    CLASS_SEARCH_PILL, CLASS_SEGMENTED_PILL, CLASS_SIDEBAR, CLASS_TOOLBAR, CLASS_TOP_TABBAR,
+    LayoutBox, LayoutScene, Rect, compute_clip_rects, is_overlay_container_class,
+    is_popup_menu_class, widget_subtree_count,
 };
 use crate::{Application, Element, Theme, WidgetNode};
 
@@ -313,8 +317,25 @@ fn paint_layout_box<M>(
                 Some(text_clip),
             );
         }
-        WidgetNode::Button { label, .. } => {
-            paint_button(pixmap, bounds, label, palette, is_hovered, clip_rect, mask);
+        WidgetNode::Button {
+            label,
+            icon_name,
+            style,
+            is_active,
+            ..
+        } => {
+            paint_button(
+                pixmap,
+                bounds,
+                label,
+                icon_name.as_deref(),
+                *style,
+                *is_active,
+                palette,
+                is_hovered,
+                clip_rect,
+                mask,
+            );
         }
         WidgetNode::TextInput {
             placeholder, value, ..
@@ -332,9 +353,21 @@ fn paint_layout_box<M>(
             );
         }
         WidgetNode::Toggler {
-            label, is_checked, ..
+            label,
+            is_checked,
+            style,
+            ..
         } => {
-            paint_toggler(pixmap, bounds, label, *is_checked, palette, clip_rect, mask);
+            paint_toggler(
+                pixmap,
+                bounds,
+                label,
+                *is_checked,
+                *style,
+                palette,
+                clip_rect,
+                mask,
+            );
         }
         WidgetNode::Dropdown {
             options, selected, ..
@@ -412,6 +445,47 @@ fn paint_container(
     palette: &ThemePalette,
     mask: Option<&Mask>,
 ) {
+    if is_popup_menu_class(class) {
+        let blur_radius = (theme.frosted_blur_radius.round() as u32).clamp(2, 10);
+        blur_pixmap_region(pixmap, bounds, blur_radius);
+
+        if class == CLASS_CONTEXT_MENU {
+            let radius = 6.0_f32;
+            fill_rounded_rect_masked(pixmap, bounds, radius, palette.frosted_surface, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, radius, 1.25, palette.card_border, mask);
+            let inner = inset_rect(bounds, 1.5);
+            stroke_rounded_rect_masked(pixmap, inner, 4.5, 1.0, palette.accent_muted, mask);
+
+            // Separator rule below the primary "Connect" action row matching the mockup popup
+            let sep_y = (bounds.y + (bounds.height * 0.24).clamp(24.0, 38.0))
+                .min(bounds.y + bounds.height - 4.0);
+            let sep_rect = Rect::new(bounds.x + 8.0, sep_y, (bounds.width - 16.0).max(4.0), 1.0);
+            fill_rounded_rect_masked(pixmap, sep_rect, 0.0, palette.divider, mask);
+        } else if class == CLASS_ADD_MENU {
+            // CLASS_ADD_MENU ("Add / Import / Export" 3-row boxed popup)
+            let radius = 4.0_f32;
+            fill_rounded_rect_masked(pixmap, bounds, radius, palette.frosted_surface, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, radius, 1.25, palette.card_border, mask);
+            let top_strip = Rect::new(
+                bounds.x + 6.0,
+                bounds.y + 1.0,
+                (bounds.width - 12.0).max(4.0),
+                2.0_f32.min(bounds.height),
+            );
+            fill_rounded_rect_masked(pixmap, top_strip, 1.0, palette.accent, mask);
+            for frac in [1.0_f32 / 3.0, 2.0_f32 / 3.0] {
+                let row_sep = Rect::new(
+                    bounds.x + 4.0,
+                    bounds.y + bounds.height * frac,
+                    (bounds.width - 8.0).max(4.0),
+                    1.0,
+                );
+                fill_rounded_rect_masked(pixmap, row_sep, 0.0, palette.divider, mask);
+            }
+        }
+        return;
+    }
+
     if is_overlay_container_class(class) {
         if class == CLASS_ADD_DESKTOP_MODAL {
             // Dim the full viewport behind the modal dialog
@@ -444,34 +518,239 @@ fn paint_container(
     }
 
     match class {
-        "rferram-root-shell" => {
+        CLASS_ROOT_SHELL => {
             fill_rounded_rect_masked(pixmap, bounds, 0.0, palette.window_bg, mask);
         }
-        "rferram-header" => {
+        CLASS_HEADER => {
             fill_rounded_rect_masked(pixmap, bounds, 8.0, palette.header_bg, mask);
             stroke_rounded_rect_masked(pixmap, bounds, 8.0, 1.0, palette.card_border, mask);
         }
-        "rferram-sidebar" => {
+        CLASS_TOP_TABBAR => {
+            fill_rounded_rect_masked(pixmap, bounds, 6.0, palette.input_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, 6.0, 1.0, palette.card_border, mask);
+
+            // Active "Connections" tab surface on the left side of the top tabbar
+            let tab_w = 132.0_f32.min((bounds.width * 0.42).max(24.0));
+            let tab_h = (bounds.height - 6.0).max(4.0);
+            let tab_rect = Rect::new(bounds.x + 4.0, bounds.y + 3.0, tab_w, tab_h);
+            fill_rounded_rect_masked(pixmap, tab_rect, 5.0, palette.card_bg, mask);
+            stroke_rounded_rect_masked(pixmap, tab_rect, 5.0, 1.0, palette.card_border, mask);
+
+            let tab_indicator = Rect::new(
+                tab_rect.x + 8.0,
+                (tab_rect.y + tab_rect.height - 2.0).max(tab_rect.y),
+                (tab_rect.width - 16.0).max(4.0),
+                2.0,
+            );
+            fill_rounded_rect_masked(pixmap, tab_indicator, 1.0, palette.accent, mask);
+        }
+        CLASS_TOOLBAR => {
+            fill_rounded_rect_masked(pixmap, bounds, 6.0, palette.header_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, 6.0, 1.0, palette.card_border, mask);
+            let bottom_rule = Rect::new(
+                bounds.x + 4.0,
+                (bounds.y + bounds.height - 1.5).max(bounds.y),
+                (bounds.width - 8.0).max(4.0),
+                1.0,
+            );
+            fill_rounded_rect_masked(pixmap, bottom_rule, 0.0, palette.divider, mask);
+        }
+        CLASS_SEGMENTED_PILL => {
+            let radius = (bounds.height * 0.5).min(18.0);
+            fill_rounded_rect_masked(pixmap, bounds, radius, palette.input_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, radius, 1.2, palette.input_border, mask);
+            let mid_x = bounds.x + bounds.width * 0.5 - 0.5;
+            let sep_rect = Rect::new(mid_x, bounds.y + 5.0, 1.0, (bounds.height - 10.0).max(4.0));
+            fill_rounded_rect_masked(pixmap, sep_rect, 0.0, palette.divider, mask);
+        }
+        CLASS_SEARCH_PILL => {
+            let radius = (bounds.height * 0.5).min(18.0);
+            fill_rounded_rect_masked(pixmap, bounds, radius, palette.input_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, radius, 1.25, palette.input_border, mask);
+            let inner = inset_rect(bounds, 1.5);
+            stroke_rounded_rect_masked(
+                pixmap,
+                inner,
+                (radius - 1.5).max(2.0),
+                1.0,
+                palette.card_border,
+                mask,
+            );
+        }
+        CLASS_SIDEBAR => {
             fill_rounded_rect_masked(pixmap, bounds, 8.0, palette.sidebar_bg, mask);
             stroke_rounded_rect_masked(pixmap, bounds, 8.0, 1.0, palette.card_border, mask);
         }
-        "rferram-group-section" => {
+        CLASS_GROUP_SECTION => {
             fill_rounded_rect_masked(pixmap, bounds, 10.0, palette.group_bg, mask);
             stroke_rounded_rect_masked(pixmap, bounds, 10.0, 1.0, palette.card_border, mask);
         }
-        "rferram-connection-card" => {
-            fill_rounded_rect_masked(pixmap, bounds, 10.0, palette.card_bg, mask);
-            stroke_rounded_rect_masked(pixmap, bounds, 10.0, 1.25, palette.card_border, mask);
+        CLASS_GROUP_BADGE => {
+            fill_rounded_rect_masked(pixmap, bounds, 6.0, palette.card_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, 6.0, 1.2, palette.card_border, mask);
+            let badge_strip = Rect::new(
+                bounds.x + 6.0,
+                (bounds.y + bounds.height - 2.5).max(bounds.y),
+                (bounds.width - 12.0).max(4.0),
+                2.0,
+            );
+            fill_rounded_rect_masked(pixmap, badge_strip, 1.0, palette.accent, mask);
+        }
+        CLASS_CONNECTION_CARD => {
+            let outer_r = 16.0_f32;
+            fill_rounded_rect_masked(pixmap, bounds, outer_r, palette.card_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, outer_r, 1.5, palette.card_border, mask);
+
+            // Inner second border ("double border" matching rFerramLayout-PNG.drawio.png)
+            let inner_bounds = inset_rect(bounds, 3.5);
+            let inner_r = (outer_r - 3.0).max(4.0);
+            stroke_rounded_rect_masked(
+                pixmap,
+                inner_bounds,
+                inner_r,
+                1.0,
+                palette.input_border,
+                mask,
+            );
+
+            // Curved upper preview sheen across the upper half of the portrait card
+            paint_card_upper_preview_sheen(pixmap, bounds, inner_r, theme, palette, mask);
+
             // Subtle accent left indicator bar on each connection card
             let bar = Rect::new(
                 bounds.x + 2.0,
-                bounds.y + 8.0,
-                3.0,
-                (bounds.height - 16.0).max(4.0),
+                bounds.y + 12.0,
+                2.5,
+                (bounds.height - 24.0).max(4.0),
             );
-            fill_rounded_rect_masked(pixmap, bar, 1.5, palette.accent, mask);
+            fill_rounded_rect_masked(pixmap, bar, 1.25, palette.accent, mask);
+        }
+        CLASS_FORM_ROW => {
+            fill_rounded_rect_masked(pixmap, bounds, 5.0, palette.group_bg, mask);
+            let bottom_guide = Rect::new(
+                bounds.x + 4.0,
+                (bounds.y + bounds.height - 1.0).max(bounds.y),
+                (bounds.width - 8.0).max(2.0),
+                1.0,
+            );
+            fill_rounded_rect_masked(pixmap, bottom_guide, 0.0, palette.divider, mask);
+        }
+        CLASS_MODAL_TABS => {
+            let radius = (bounds.height * 0.5).min(16.0);
+            fill_rounded_rect_masked(pixmap, bounds, radius, palette.input_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, radius, 1.2, palette.card_border, mask);
+            for frac in [0.25_f32, 0.50, 0.75] {
+                let tick = Rect::new(
+                    bounds.x + bounds.width * frac,
+                    bounds.y + 4.0,
+                    1.0,
+                    (bounds.height - 8.0).max(4.0),
+                );
+                fill_rounded_rect_masked(pixmap, tick, 0.0, palette.divider, mask);
+            }
+        }
+        CLASS_MODAL_TAB_FRAME => {
+            fill_rounded_rect_masked(pixmap, bounds, 8.0, palette.group_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, 8.0, 1.25, palette.card_border, mask);
+            let inner = inset_rect(bounds, 2.5);
+            stroke_rounded_rect_masked(pixmap, inner, 6.0, 1.0, palette.divider, mask);
+        }
+        CLASS_MODAL_FOOTER => {
+            let top_rule = Rect::new(
+                bounds.x + 2.0,
+                bounds.y + 1.0,
+                (bounds.width - 4.0).max(2.0),
+                1.0,
+            );
+            fill_rounded_rect_masked(pixmap, top_rule, 0.0, palette.divider, mask);
+
+            let pill_w = 148.0_f32.min((bounds.width - 8.0).max(16.0));
+            let pill_h = (bounds.height - 6.0).max(8.0);
+            let pill_rect = Rect::new(
+                (bounds.x + bounds.width - pill_w - 4.0).max(bounds.x),
+                bounds.y + 4.0,
+                pill_w,
+                pill_h,
+            );
+            fill_rounded_rect_masked(pixmap, pill_rect, 6.0, palette.input_bg, mask);
+            stroke_rounded_rect_masked(pixmap, pill_rect, 6.0, 1.0, palette.card_border, mask);
+            let mid_sep = Rect::new(
+                pill_rect.x + pill_rect.width * 0.5,
+                pill_rect.y + 4.0,
+                1.0,
+                (pill_rect.height - 8.0).max(2.0),
+            );
+            fill_rounded_rect_masked(pixmap, mid_sep, 0.0, palette.divider, mask);
+        }
+        CLASS_DRAWER_NAV => {
+            fill_rounded_rect_masked(pixmap, bounds, 6.0, palette.sidebar_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, 6.0, 1.0, palette.card_border, mask);
+            let right_sep = Rect::new(
+                (bounds.x + bounds.width - 2.0).max(bounds.x),
+                bounds.y + 4.0,
+                1.5,
+                (bounds.height - 8.0).max(4.0),
+            );
+            fill_rounded_rect_masked(pixmap, right_sep, 0.0, palette.divider, mask);
+        }
+        CLASS_DRAWER_CONTENT => {
+            fill_rounded_rect_masked(pixmap, bounds, 6.0, palette.group_bg, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, 6.0, 1.0, palette.card_border, mask);
+            let inner = inset_rect(bounds, 2.0);
+            stroke_rounded_rect_masked(pixmap, inner, 4.5, 1.0, palette.input_border, mask);
         }
         _ => {}
+    }
+}
+
+fn paint_card_upper_preview_sheen(
+    pixmap: &mut Pixmap,
+    card_bounds: Rect,
+    inner_radius: f32,
+    theme: &Theme,
+    palette: &ThemePalette,
+    mask: Option<&Mask>,
+) {
+    let sheen_box = inset_rect(card_bounds, 5.0);
+    if sheen_box.width <= 8.0 || sheen_box.height <= 12.0 {
+        return;
+    }
+
+    let x0 = sheen_box.x;
+    let y0 = sheen_box.y;
+    let x1 = x0 + sheen_box.width;
+    let cx = x0 + sheen_box.width * 0.5;
+    let r = (inner_radius - 1.5)
+        .clamp(2.0, sheen_box.width * 0.4)
+        .clamp(2.0, sheen_box.height * 0.3);
+    let y_edge = y0 + sheen_box.height * 0.44;
+    let y_ctrl = y0 + sheen_box.height * 0.58;
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(x0 + r, y0);
+    pb.line_to(x1 - r, y0);
+    pb.quad_to(x1, y0, x1, y0 + r);
+    pb.line_to(x1, y_edge);
+    pb.quad_to(cx, y_ctrl, x0, y_edge);
+    pb.line_to(x0, y0 + r);
+    pb.quad_to(x0, y0, x0 + r, y0);
+    pb.close();
+
+    if let Some(sheen_path) = pb.finish() {
+        let sheen_rgba = if theme.is_dark {
+            [255, 255, 255, 22]
+        } else {
+            [20, 32, 52, 16]
+        };
+        fill_vector_path(pixmap, &sheen_path, sheen_rgba, mask);
+    }
+
+    // Subtle curved horizon stroke along the lower arc of the preview sheen
+    let mut arc_pb = PathBuilder::new();
+    arc_pb.move_to(x0 + 1.0, y_edge);
+    arc_pb.quad_to(cx, y_ctrl, x1 - 1.0, y_edge);
+    if let Some(arc_path) = arc_pb.finish() {
+        stroke_vector_path(pixmap, &arc_path, 1.0, palette.divider, mask);
     }
 }
 
@@ -479,53 +758,315 @@ fn is_primary_accent_button(label: &str) -> bool {
     matches!(label, "+" | "Add" | "Connect" | "*")
 }
 
+fn resolve_shorthand_icon_name(name_or_label: &str) -> Option<&str> {
+    match name_or_label {
+        "+" => Some("add-symbolic"),
+        "?" => Some("help-browser-symbolic"),
+        "..." => Some("view-more-symbolic"),
+        "*" => Some("emblem-favorite-symbolic"),
+        s if s.ends_with("-symbolic") || s.contains("rFerram") || s.contains("rferram") => Some(s),
+        _ => None,
+    }
+}
+
+fn icon_palette_for_accent_fill(palette: &ThemePalette) -> ThemePalette {
+    let mut contrasted = *palette;
+    contrasted.accent = palette.text_on_accent;
+    contrasted.accent_muted = [
+        palette.text_on_accent[0],
+        palette.text_on_accent[1],
+        palette.text_on_accent[2],
+        96,
+    ];
+    contrasted
+}
+
+#[allow(clippy::too_many_arguments)]
 fn paint_button(
     pixmap: &mut Pixmap,
     bounds: Rect,
     label: &str,
+    icon_name: Option<&str>,
+    style: crate::ButtonStyle,
+    is_active: bool,
     palette: &ThemePalette,
     is_hovered: bool,
     clip_rect: Option<Rect>,
     mask: Option<&Mask>,
 ) {
-    let is_primary = is_primary_accent_button(label);
-    let fill_color = if is_primary {
-        palette.accent
-    } else if is_hovered {
-        palette.accent_muted
-    } else {
-        palette.button_bg
-    };
-    let border_color = if is_primary || is_hovered {
-        palette.accent
-    } else {
-        palette.button_border
-    };
-    let text_color = if is_primary {
-        palette.text_on_accent
-    } else {
-        palette.text_primary
-    };
-
-    fill_rounded_rect_masked(pixmap, bounds, 6.0, fill_color, mask);
-    stroke_rounded_rect_masked(pixmap, bounds, 6.0, 1.2, border_color, mask);
-
     let font_size = 13u16;
-    let text_w = measure_text_width(label, font_size);
     let text_h = glyph_pixel_height(font_size);
-    let tx = bounds.x + ((bounds.width - text_w) * 0.5).max(4.0);
-    let ty = bounds.y + ((bounds.height - text_h) * 0.5).max(2.0);
     let inner_clip = inset_rect(bounds, 2.0);
     let effective_clip = clip_rect.map_or(inner_clip, |c| inner_clip.intersect_clamped(c));
-    draw_text(
-        pixmap,
-        label,
-        tx,
-        ty,
-        font_size,
-        text_color,
-        Some(effective_clip),
-    );
+
+    match style {
+        crate::ButtonStyle::Icon | crate::ButtonStyle::CardTrigger => {
+            let is_card = style == crate::ButtonStyle::CardTrigger;
+            let radius = (bounds.height * 0.5).min(if is_card { 7.0 } else { 8.0 });
+            let fill_color = if is_active {
+                palette.accent
+            } else if is_hovered {
+                palette.accent_muted
+            } else if is_card {
+                palette.input_bg
+            } else {
+                palette.button_bg
+            };
+            let border_color = if is_active || is_hovered {
+                palette.accent
+            } else if is_card {
+                palette.card_border
+            } else {
+                palette.button_border
+            };
+
+            fill_rounded_rect_masked(pixmap, bounds, radius, fill_color, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, radius, 1.2, border_color, mask);
+
+            let resolved_icon = icon_name.or_else(|| resolve_shorthand_icon_name(label));
+            if let Some(ic_name) = resolved_icon {
+                let side = bounds.width.min(bounds.height).clamp(12.0, 22.0);
+                let ic_rect = Rect::new(
+                    bounds.x + (bounds.width - side) * 0.5,
+                    bounds.y + (bounds.height - side) * 0.5,
+                    side,
+                    side,
+                );
+                let ic_palette = if is_active {
+                    icon_palette_for_accent_fill(palette)
+                } else {
+                    *palette
+                };
+                paint_icon(
+                    pixmap,
+                    ic_rect,
+                    ic_name,
+                    side.round() as u16,
+                    &ic_palette,
+                    mask,
+                );
+            } else if !label.is_empty() {
+                let text_w = measure_text_width(label, font_size);
+                let tx = bounds.x + ((bounds.width - text_w) * 0.5).max(3.0);
+                let ty = bounds.y + ((bounds.height - text_h) * 0.5).max(2.0);
+                let text_color = if is_active {
+                    palette.text_on_accent
+                } else {
+                    palette.text_primary
+                };
+                draw_text(
+                    pixmap,
+                    label,
+                    tx,
+                    ty,
+                    font_size,
+                    text_color,
+                    Some(effective_clip),
+                );
+            }
+        }
+        crate::ButtonStyle::Segmented => {
+            let fill_color = if is_active {
+                palette.accent_muted
+            } else if is_hovered {
+                palette.button_bg
+            } else {
+                palette.input_bg
+            };
+            let border_color = if is_active || is_hovered {
+                palette.accent
+            } else {
+                palette.input_border
+            };
+            let text_color = if is_active || is_hovered {
+                palette.text_primary
+            } else {
+                palette.text_muted
+            };
+
+            fill_rounded_rect_masked(pixmap, bounds, 6.0, fill_color, mask);
+            stroke_rounded_rect_masked(
+                pixmap,
+                bounds,
+                6.0,
+                if is_active { 1.5 } else { 1.0 },
+                border_color,
+                mask,
+            );
+
+            if is_active {
+                let bar_w = (bounds.width - 12.0).max(6.0);
+                let bar_rect = Rect::new(
+                    bounds.x + (bounds.width - bar_w) * 0.5,
+                    (bounds.y + bounds.height - 3.0).max(bounds.y),
+                    bar_w,
+                    2.5,
+                );
+                fill_rounded_rect_masked(pixmap, bar_rect, 1.25, palette.accent, mask);
+            }
+
+            let mut text_x_offset = 0.0_f32;
+            if let Some(ic_name) = icon_name {
+                let ic_side = 16.0_f32.min(bounds.height - 6.0).max(10.0);
+                if label.is_empty() || label == ic_name {
+                    let ic_rect = Rect::new(
+                        bounds.x + (bounds.width - ic_side) * 0.5,
+                        bounds.y + (bounds.height - ic_side) * 0.5,
+                        ic_side,
+                        ic_side,
+                    );
+                    paint_icon(pixmap, ic_rect, ic_name, 16, palette, mask);
+                    return;
+                }
+                let ic_rect = Rect::new(
+                    bounds.x + 6.0,
+                    bounds.y + (bounds.height - ic_side) * 0.5,
+                    ic_side,
+                    ic_side,
+                );
+                paint_icon(pixmap, ic_rect, ic_name, 16, palette, mask);
+                text_x_offset = ic_side + 6.0;
+            }
+
+            let text_w = measure_text_width(label, font_size);
+            let tx =
+                bounds.x + text_x_offset + ((bounds.width - text_x_offset - text_w) * 0.5).max(4.0);
+            let ty = bounds.y + ((bounds.height - text_h) * 0.5).max(2.0);
+            draw_text(
+                pixmap,
+                label,
+                tx,
+                ty,
+                font_size,
+                text_color,
+                Some(effective_clip),
+            );
+        }
+        crate::ButtonStyle::NavRow | crate::ButtonStyle::MenuItem => {
+            let is_menu = style == crate::ButtonStyle::MenuItem;
+            let radius = if is_menu { 4.0 } else { 6.0 };
+            let fill_color = if is_active || is_hovered {
+                palette.accent_muted
+            } else if is_menu {
+                palette.card_bg
+            } else {
+                palette.sidebar_bg
+            };
+            let border_color = if is_active || is_hovered {
+                palette.accent
+            } else if is_menu {
+                palette.divider
+            } else {
+                palette.card_border
+            };
+
+            fill_rounded_rect_masked(pixmap, bounds, radius, fill_color, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, radius, 1.0, border_color, mask);
+
+            if is_active {
+                let bar_rect = Rect::new(
+                    bounds.x + 2.0,
+                    bounds.y + 5.0,
+                    3.0,
+                    (bounds.height - 10.0).max(4.0),
+                );
+                fill_rounded_rect_masked(pixmap, bar_rect, 1.5, palette.accent, mask);
+            }
+
+            let mut tx = bounds.x + 10.0;
+            if let Some(ic_name) = icon_name {
+                let ic_side = 16.0_f32.min(bounds.height - 6.0).max(10.0);
+                let ic_rect = Rect::new(
+                    bounds.x + 8.0,
+                    bounds.y + (bounds.height - ic_side) * 0.5,
+                    ic_side,
+                    ic_side,
+                );
+                paint_icon(pixmap, ic_rect, ic_name, 16, palette, mask);
+                if label.is_empty() || label == ic_name {
+                    return;
+                }
+                tx = bounds.x + 8.0 + ic_side + 8.0;
+            }
+
+            let ty = bounds.y + ((bounds.height - text_h) * 0.5).max(2.0);
+            draw_text(
+                pixmap,
+                label,
+                tx,
+                ty,
+                font_size,
+                palette.text_primary,
+                Some(effective_clip),
+            );
+        }
+        crate::ButtonStyle::Primary | crate::ButtonStyle::Standard => {
+            let is_primary =
+                style == crate::ButtonStyle::Primary || is_primary_accent_button(label);
+            let fill_color = if is_primary {
+                palette.accent
+            } else if is_active || is_hovered {
+                palette.accent_muted
+            } else {
+                palette.button_bg
+            };
+            let border_color = if is_primary || is_active || is_hovered {
+                palette.accent
+            } else {
+                palette.button_border
+            };
+            let text_color = if is_primary {
+                palette.text_on_accent
+            } else {
+                palette.text_primary
+            };
+
+            fill_rounded_rect_masked(pixmap, bounds, 6.0, fill_color, mask);
+            stroke_rounded_rect_masked(pixmap, bounds, 6.0, 1.2, border_color, mask);
+
+            let mut text_x_offset = 0.0_f32;
+            if let Some(ic_name) = icon_name {
+                let ic_side = 16.0_f32.min(bounds.height - 6.0).max(10.0);
+                let ic_palette = if is_primary {
+                    icon_palette_for_accent_fill(palette)
+                } else {
+                    *palette
+                };
+                if label.is_empty() || label == ic_name {
+                    let ic_rect = Rect::new(
+                        bounds.x + (bounds.width - ic_side) * 0.5,
+                        bounds.y + (bounds.height - ic_side) * 0.5,
+                        ic_side,
+                        ic_side,
+                    );
+                    paint_icon(pixmap, ic_rect, ic_name, 16, &ic_palette, mask);
+                    return;
+                }
+                let ic_rect = Rect::new(
+                    bounds.x + 6.0,
+                    bounds.y + (bounds.height - ic_side) * 0.5,
+                    ic_side,
+                    ic_side,
+                );
+                paint_icon(pixmap, ic_rect, ic_name, 16, &ic_palette, mask);
+                text_x_offset = ic_side + 6.0;
+            }
+
+            let text_w = measure_text_width(label, font_size);
+            let tx =
+                bounds.x + text_x_offset + ((bounds.width - text_x_offset - text_w) * 0.5).max(4.0);
+            let ty = bounds.y + ((bounds.height - text_h) * 0.5).max(2.0);
+            draw_text(
+                pixmap,
+                label,
+                tx,
+                ty,
+                font_size,
+                text_color,
+                Some(effective_clip),
+            );
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -586,62 +1127,91 @@ fn paint_text_input(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn paint_toggler(
     pixmap: &mut Pixmap,
     bounds: Rect,
     label: &str,
     is_checked: bool,
+    style: crate::TogglerStyle,
     palette: &ThemePalette,
     clip_rect: Option<Rect>,
     mask: Option<&Mask>,
 ) {
-    let switch_w = 34.0_f32.min(bounds.width * 0.45).max(20.0);
-    let switch_h = 18.0_f32.min(bounds.height - 4.0).max(12.0);
-    let switch_x = bounds.x + 2.0;
-    let switch_y = bounds.y + (bounds.height - switch_h) * 0.5;
-    let switch_rect = Rect::new(switch_x, switch_y, switch_w, switch_h);
-    let track_color = if is_checked {
-        palette.accent
-    } else {
-        palette.toggler_off_bg
-    };
+    let label_x = match style {
+        crate::TogglerStyle::Checkbox => {
+            let box_size = 16.0_f32.min(bounds.height - 4.0).max(12.0);
+            let box_x = bounds.x + 2.0;
+            let box_y = bounds.y + (bounds.height - box_size) * 0.5;
+            let box_rect = Rect::new(box_x, box_y, box_size, box_size);
+            if is_checked {
+                fill_rounded_rect_masked(pixmap, box_rect, 3.5, palette.accent, mask);
+                stroke_rounded_rect_masked(pixmap, box_rect, 3.5, 1.2, palette.accent, mask);
 
-    fill_rounded_rect_masked(pixmap, switch_rect, switch_h * 0.5, track_color, mask);
-    stroke_rounded_rect_masked(
-        pixmap,
-        switch_rect,
-        switch_h * 0.5,
-        1.0,
-        palette.card_border,
-        mask,
-    );
+                // Anti-aliased vector checkmark inside the checked box
+                let mut pb = PathBuilder::new();
+                pb.move_to(box_x + box_size * 0.22, box_y + box_size * 0.52);
+                pb.line_to(box_x + box_size * 0.44, box_y + box_size * 0.74);
+                pb.line_to(box_x + box_size * 0.78, box_y + box_size * 0.28);
+                if let Some(path) = pb.finish() {
+                    stroke_vector_path(pixmap, &path, 2.0, palette.text_on_accent, mask);
+                }
+            } else {
+                fill_rounded_rect_masked(pixmap, box_rect, 3.5, palette.input_bg, mask);
+                stroke_rounded_rect_masked(pixmap, box_rect, 3.5, 1.2, palette.input_border, mask);
+            }
+            box_x + box_size + 8.0
+        }
+        crate::TogglerStyle::Switch => {
+            let switch_w = 34.0_f32.min(bounds.width * 0.45).max(20.0);
+            let switch_h = 18.0_f32.min(bounds.height - 4.0).max(12.0);
+            let switch_x = bounds.x + 2.0;
+            let switch_y = bounds.y + (bounds.height - switch_h) * 0.5;
+            let switch_rect = Rect::new(switch_x, switch_y, switch_w, switch_h);
+            let track_color = if is_checked {
+                palette.accent
+            } else {
+                palette.toggler_off_bg
+            };
 
-    let thumb_d = (switch_h - 4.0).max(6.0);
-    let thumb_x = if is_checked {
-        switch_x + switch_w - thumb_d - 2.0
-    } else {
-        switch_x + 2.0
+            fill_rounded_rect_masked(pixmap, switch_rect, switch_h * 0.5, track_color, mask);
+            stroke_rounded_rect_masked(
+                pixmap,
+                switch_rect,
+                switch_h * 0.5,
+                1.0,
+                palette.card_border,
+                mask,
+            );
+
+            let thumb_d = (switch_h - 4.0).max(6.0);
+            let thumb_x = if is_checked {
+                switch_x + switch_w - thumb_d - 2.0
+            } else {
+                switch_x + 2.0
+            };
+            let thumb_y = switch_y + (switch_h - thumb_d) * 0.5;
+            let thumb_rect = Rect::new(thumb_x, thumb_y, thumb_d, thumb_d);
+            fill_rounded_rect_masked(
+                pixmap,
+                thumb_rect,
+                thumb_d * 0.5,
+                palette.toggler_thumb,
+                mask,
+            );
+            switch_x + switch_w + 8.0
+        }
     };
-    let thumb_y = switch_y + (switch_h - thumb_d) * 0.5;
-    let thumb_rect = Rect::new(thumb_x, thumb_y, thumb_d, thumb_d);
-    fill_rounded_rect_masked(
-        pixmap,
-        thumb_rect,
-        thumb_d * 0.5,
-        palette.toggler_thumb,
-        mask,
-    );
 
     if !label.is_empty() {
         let font_size = 13u16;
         let text_h = glyph_pixel_height(font_size);
-        let tx = switch_x + switch_w + 8.0;
         let ty = bounds.y + ((bounds.height - text_h) * 0.5).max(2.0);
         let effective_clip = clip_rect.map_or(bounds, |c| bounds.intersect_clamped(c));
         draw_text(
             pixmap,
             label,
-            tx,
+            label_x,
             ty,
             font_size,
             palette.text_primary,
@@ -811,11 +1381,82 @@ fn paint_rferram_themed_logo(
     );
 }
 
+/// Canonical list of all Freedesktop / COSMIC symbolic icons specified in `UI_Fix.md`
+/// and `rFerramLayout-PNG.drawio.png`.
+pub const SYMBOLIC_ICON_NAMES: &[&str] = &[
+    "com.theinfomoose.rFerram-symbolic",
+    "add-symbolic",
+    "view-grid-symbolic",
+    "view-list-symbolic",
+    "view-sort-descending-symbolic",
+    "system-search-symbolic",
+    "preferences-system-symbolic",
+    "help-browser-symbolic",
+    "emblem-favorite-symbolic",
+    "folder-symbolic",
+    "folder-remote-symbolic",
+    "object-select-symbolic",
+    "input-keyboard-symbolic",
+    "video-display-symbolic",
+    "user-bookmarks-symbolic",
+    "network-vpn-symbolic",
+    "document-open-symbolic",
+    "tools-symbolic",
+    "dialog-warning-symbolic",
+    "lab-symbolic",
+    "view-more-symbolic",
+    "avatar-default-symbolic",
+];
+
+fn stroke_vector_path(
+    pixmap: &mut Pixmap,
+    path: &tiny_skia::Path,
+    stroke_width: f32,
+    rgba: [u8; 4],
+    mask: Option<&Mask>,
+) {
+    let mut paint = Paint::default();
+    paint.set_color(to_skia_color(rgba));
+    paint.anti_alias = true;
+    let stroke = Stroke {
+        width: stroke_width,
+        line_cap: LineCap::Round,
+        line_join: LineJoin::Round,
+        ..Default::default()
+    };
+    pixmap.stroke_path(path, &paint, &stroke, Transform::identity(), mask);
+}
+
+fn fill_vector_path(
+    pixmap: &mut Pixmap,
+    path: &tiny_skia::Path,
+    rgba: [u8; 4],
+    mask: Option<&Mask>,
+) {
+    let mut paint = Paint::default();
+    paint.set_color(to_skia_color(rgba));
+    paint.anti_alias = true;
+    pixmap.fill_path(path, &paint, FillRule::Winding, Transform::identity(), mask);
+}
+
+fn push_circle_subpath(pb: &mut PathBuilder, cx: f32, cy: f32, r: f32) {
+    if r <= 0.1 {
+        return;
+    }
+    let k = r * 0.552_284_8;
+    pb.move_to(cx, cy - r);
+    pb.cubic_to(cx + k, cy - r, cx + r, cy - k, cx + r, cy);
+    pb.cubic_to(cx + r, cy + k, cx + k, cy + r, cx, cy + r);
+    pb.cubic_to(cx - k, cy + r, cx - r, cy + k, cx - r, cy);
+    pb.cubic_to(cx - r, cy - k, cx - k, cy - r, cx, cy - r);
+    pb.close();
+}
+
 fn paint_icon(
     pixmap: &mut Pixmap,
     bounds: Rect,
     name: &str,
-    _size: u16,
+    size: u16,
     palette: &ThemePalette,
     mask: Option<&Mask>,
 ) {
@@ -823,26 +1464,409 @@ fn paint_icon(
         paint_rferram_themed_logo(pixmap, bounds, *palette, mask);
         return;
     }
-    let icon_rect = inset_rect(bounds, 2.0);
-    if name.contains("folder") {
-        // Draw folder tab + body
-        let tab_rect = Rect::new(
-            icon_rect.x,
-            icon_rect.y,
-            (icon_rect.width * 0.45).max(4.0),
-            (icon_rect.height * 0.28).max(3.0),
-        );
-        let body_rect = Rect::new(
-            icon_rect.x,
-            icon_rect.y + tab_rect.height * 0.6,
-            icon_rect.width,
-            (icon_rect.height - tab_rect.height * 0.6).max(4.0),
-        );
-        fill_rounded_rect_masked(pixmap, tab_rect, 2.0, palette.accent, mask);
-        fill_rounded_rect_masked(pixmap, body_rect, 3.0, palette.accent, mask);
+
+    let max_side = bounds.width.min(bounds.height).max(1.0);
+    let target_side = if size > 0 {
+        f32::from(size).min(max_side).max(1.0)
     } else {
-        fill_rounded_rect_masked(pixmap, icon_rect, 4.0, palette.accent_muted, mask);
-        stroke_rounded_rect_masked(pixmap, icon_rect, 4.0, 1.5, palette.accent, mask);
+        max_side
+    };
+    let square_bounds = Rect::new(
+        bounds.x + (bounds.width - target_side) * 0.5,
+        bounds.y + (bounds.height - target_side) * 0.5,
+        target_side,
+        target_side,
+    );
+    let pad = (target_side * 0.1).min(2.0);
+    let icon_rect = inset_rect(square_bounds, pad);
+    let x = icon_rect.x;
+    let y = icon_rect.y;
+    let w = icon_rect.width.max(1.0);
+    let h = icon_rect.height.max(1.0);
+    let cx = x + w * 0.5;
+    let cy = y + h * 0.5;
+    let s = w.min(h);
+    let sw = (s * 0.115).clamp((s * 0.18).min(1.35), 2.5);
+
+    match name {
+        "add-symbolic" | "list-add-symbolic" => {
+            let arm = s * 0.36;
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - arm, cy);
+            pb.line_to(cx + arm, cy);
+            pb.move_to(cx, cy - arm);
+            pb.line_to(cx, cy + arm);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw * 1.15, palette.accent, mask);
+            }
+        }
+        "view-grid-symbolic" => {
+            let cell_w = w * 0.36;
+            let cell_h = h * 0.36;
+            let gap_x = (w - cell_w * 2.0) * 0.38;
+            let gap_y = (h - cell_h * 2.0) * 0.38;
+            let x0 = cx - cell_w - gap_x * 0.5;
+            let x1 = cx + gap_x * 0.5;
+            let y0 = cy - cell_h - gap_y * 0.5;
+            let y1 = cy + gap_y * 0.5;
+            for (rx, ry) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
+                let cell = Rect::new(rx, ry, cell_w, cell_h);
+                fill_rounded_rect_masked(pixmap, cell, 1.8, palette.accent_muted, mask);
+                stroke_rounded_rect_masked(pixmap, cell, 1.8, sw * 0.85, palette.accent, mask);
+            }
+        }
+        "view-list-symbolic" => {
+            let mut pb = PathBuilder::new();
+            for frac in [0.24_f32, 0.50, 0.76] {
+                let ry = y + h * frac;
+                push_circle_subpath(&mut pb, x + w * 0.18, ry, (s * 0.075).max(sw * 0.45));
+                pb.move_to(x + w * 0.36, ry);
+                pb.line_to(x + w * 0.88, ry);
+            }
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "view-sort-descending-symbolic" => {
+            let mut pb = PathBuilder::new();
+            // Left vertical arrow shaft + bottom arrowhead
+            let ax = x + w * 0.25;
+            pb.move_to(ax, y + h * 0.16);
+            pb.line_to(ax, y + h * 0.82);
+            pb.move_to(ax - w * 0.13, y + h * 0.66);
+            pb.line_to(ax, y + h * 0.84);
+            pb.line_to(ax + w * 0.13, y + h * 0.66);
+            // Right descending horizontal filter bars
+            pb.move_to(x + w * 0.48, y + h * 0.24);
+            pb.line_to(x + w * 0.90, y + h * 0.24);
+            pb.move_to(x + w * 0.48, y + h * 0.50);
+            pb.line_to(x + w * 0.78, y + h * 0.50);
+            pb.move_to(x + w * 0.48, y + h * 0.76);
+            pb.line_to(x + w * 0.66, y + h * 0.76);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "system-search-symbolic" | "edit-find-symbolic" => {
+            let lcx = x + w * 0.42;
+            let lcy = y + h * 0.42;
+            let lr = s * 0.26;
+            let mut pb = PathBuilder::new();
+            push_circle_subpath(&mut pb, lcx, lcy, lr);
+            pb.move_to(lcx + lr * 0.72, lcy + lr * 0.72);
+            pb.line_to(x + w * 0.86, y + h * 0.86);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "preferences-system-symbolic" | "emblem-system-symbolic" => {
+            let r_outer = s * 0.27;
+            let r_inner = s * 0.11;
+            let mut pb = PathBuilder::new();
+            push_circle_subpath(&mut pb, cx, cy, r_outer);
+            push_circle_subpath(&mut pb, cx, cy, r_inner);
+            for i in 0..8 {
+                let angle = (i as f32) * std::f32::consts::FRAC_PI_4;
+                let (sin_a, cos_a) = angle.sin_cos();
+                pb.move_to(cx + cos_a * (r_outer - 0.5), cy + sin_a * (r_outer - 0.5));
+                pb.line_to(cx + cos_a * (s * 0.42), cy + sin_a * (s * 0.42));
+            }
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw * 0.95, palette.accent, mask);
+            }
+        }
+        "help-browser-symbolic" | "dialog-question-symbolic" => {
+            let mut ring_pb = PathBuilder::new();
+            push_circle_subpath(&mut ring_pb, cx, cy, s * 0.43);
+            if let Some(ring_path) = ring_pb.finish() {
+                stroke_vector_path(pixmap, &ring_path, sw * 0.85, palette.accent_muted, mask);
+            }
+
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - s * 0.14, cy - s * 0.14);
+            pb.quad_to(cx, cy - s * 0.32, cx + s * 0.15, cy - s * 0.12);
+            pb.quad_to(cx + s * 0.15, cy - s * 0.01, cx, cy + s * 0.08);
+            pb.line_to(cx, cy + s * 0.13);
+            push_circle_subpath(&mut pb, cx, cy + s * 0.26, sw * 0.55);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "emblem-favorite-symbolic" | "starred-symbolic" | "non-starred-symbolic" => {
+            let r_out = s * 0.43;
+            let r_in = s * 0.18;
+            let mut pb = PathBuilder::new();
+            for i in 0..10 {
+                let angle =
+                    -std::f32::consts::FRAC_PI_2 + (i as f32) * (std::f32::consts::PI / 5.0);
+                let r = if i % 2 == 0 { r_out } else { r_in };
+                let px = cx + angle.cos() * r;
+                let py = cy + angle.sin() * r;
+                if i == 0 {
+                    pb.move_to(px, py);
+                } else {
+                    pb.line_to(px, py);
+                }
+            }
+            pb.close();
+            if let Some(path) = pb.finish() {
+                if name != "non-starred-symbolic" {
+                    fill_vector_path(pixmap, &path, palette.accent_muted, mask);
+                }
+                stroke_vector_path(pixmap, &path, sw * 0.9, palette.accent, mask);
+            }
+        }
+        "folder-symbolic" => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(x + w * 0.10, y + h * 0.24);
+            pb.line_to(x + w * 0.40, y + h * 0.24);
+            pb.line_to(x + w * 0.48, y + h * 0.35);
+            pb.line_to(x + w * 0.90, y + h * 0.35);
+            pb.line_to(x + w * 0.90, y + h * 0.82);
+            pb.line_to(x + w * 0.10, y + h * 0.82);
+            pb.close();
+            if let Some(path) = pb.finish() {
+                fill_vector_path(pixmap, &path, palette.accent_muted, mask);
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "folder-remote-symbolic" => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(x + w * 0.12, y + h * 0.16);
+            pb.line_to(x + w * 0.40, y + h * 0.16);
+            pb.line_to(x + w * 0.48, y + h * 0.26);
+            pb.line_to(x + w * 0.88, y + h * 0.26);
+            pb.line_to(x + w * 0.88, y + h * 0.66);
+            pb.line_to(x + w * 0.12, y + h * 0.66);
+            pb.close();
+            if let Some(folder_path) = pb.finish() {
+                fill_vector_path(pixmap, &folder_path, palette.accent_muted, mask);
+                stroke_vector_path(pixmap, &folder_path, sw * 0.95, palette.accent, mask);
+            }
+            // Remote network stem and horizontal bus with center node
+            let mut net_pb = PathBuilder::new();
+            net_pb.move_to(cx, y + h * 0.66);
+            net_pb.line_to(cx, y + h * 0.86);
+            net_pb.move_to(x + w * 0.22, y + h * 0.86);
+            net_pb.line_to(x + w * 0.78, y + h * 0.86);
+            push_circle_subpath(&mut net_pb, cx, y + h * 0.86, sw * 0.75);
+            if let Some(net_path) = net_pb.finish() {
+                stroke_vector_path(pixmap, &net_path, sw, palette.accent, mask);
+            }
+        }
+        "object-select-symbolic" | "emblem-ok-symbolic" => {
+            let mut pb = PathBuilder::new();
+            push_circle_subpath(&mut pb, cx, cy, s * 0.42);
+            pb.move_to(x + w * 0.27, cy + h * 0.02);
+            pb.line_to(x + w * 0.44, y + h * 0.69);
+            pb.line_to(x + w * 0.75, y + h * 0.33);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "input-keyboard-symbolic" => {
+            let chassis = Rect::new(x + w * 0.08, y + h * 0.22, w * 0.84, h * 0.56);
+            fill_rounded_rect_masked(pixmap, chassis, 2.5, palette.accent_muted, mask);
+            stroke_rounded_rect_masked(pixmap, chassis, 2.5, sw * 0.95, palette.accent, mask);
+
+            let mut pb = PathBuilder::new();
+            let key_half = (w * 0.04).min(0.8);
+            for col in [0.24_f32, 0.42, 0.58, 0.76] {
+                let kx = x + w * col;
+                pb.move_to(kx - key_half, y + h * 0.38);
+                pb.line_to(kx + key_half, y + h * 0.38);
+                pb.move_to(kx - key_half, y + h * 0.51);
+                pb.line_to(kx + key_half, y + h * 0.51);
+            }
+            // Spacebar row
+            pb.move_to(x + w * 0.30, y + h * 0.65);
+            pb.line_to(x + w * 0.70, y + h * 0.65);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw * 0.9, palette.accent, mask);
+            }
+        }
+        "video-display-symbolic" | "computer-symbolic" => {
+            let screen = Rect::new(x + w * 0.10, y + h * 0.14, w * 0.80, h * 0.52);
+            fill_rounded_rect_masked(pixmap, screen, 2.5, palette.accent_muted, mask);
+            stroke_rounded_rect_masked(pixmap, screen, 2.5, sw, palette.accent, mask);
+
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx, y + h * 0.66);
+            pb.line_to(cx, y + h * 0.84);
+            pb.move_to(cx - w * 0.24, y + h * 0.84);
+            pb.line_to(cx + w * 0.24, y + h * 0.84);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "user-bookmarks-symbolic" => {
+            // Hierarchical group tree / bookmark nodes matching rFerramLayout-PNG.drawio.png
+            let node_w = w * 0.24;
+            let node_h = h * 0.20;
+            let top_node = Rect::new(cx - node_w * 0.5, y + h * 0.12, node_w, node_h);
+            let left_node = Rect::new(x + w * 0.14, y + h * 0.68, node_w, node_h);
+            let right_node = Rect::new(x + w * 0.62, y + h * 0.68, node_w, node_h);
+            for nr in [top_node, left_node, right_node] {
+                fill_rounded_rect_masked(pixmap, nr, 1.5, palette.accent_muted, mask);
+                stroke_rounded_rect_masked(pixmap, nr, 1.5, sw * 0.85, palette.accent, mask);
+            }
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx, y + h * 0.32);
+            pb.line_to(cx, y + h * 0.50);
+            pb.move_to(x + w * 0.26, y + h * 0.50);
+            pb.line_to(x + w * 0.74, y + h * 0.50);
+            pb.move_to(x + w * 0.26, y + h * 0.50);
+            pb.line_to(x + w * 0.26, y + h * 0.68);
+            pb.move_to(x + w * 0.74, y + h * 0.50);
+            pb.line_to(x + w * 0.74, y + h * 0.68);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw * 0.85, palette.accent, mask);
+            }
+        }
+        "network-vpn-symbolic" => {
+            // VPN tunnel portal bracket + directional arrow/shield matching rFerramLayout-PNG.drawio.png
+            let mut pb = PathBuilder::new();
+            // Right portal bracket
+            pb.move_to(x + w * 0.46, y + h * 0.16);
+            pb.line_to(x + w * 0.84, y + h * 0.16);
+            pb.line_to(x + w * 0.84, y + h * 0.84);
+            pb.line_to(x + w * 0.46, y + h * 0.84);
+            // Tunnel entry arrow from left into portal
+            pb.move_to(x + w * 0.12, cy);
+            pb.line_to(x + w * 0.64, cy);
+            pb.move_to(x + w * 0.46, cy - h * 0.18);
+            pb.line_to(x + w * 0.66, cy);
+            pb.line_to(x + w * 0.46, cy + h * 0.18);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "document-open-symbolic" | "x-office-document-symbolic" => {
+            let mut pb = PathBuilder::new();
+            // Page outline with top-right folded dog-ear corner
+            pb.move_to(x + w * 0.20, y + h * 0.12);
+            pb.line_to(x + w * 0.62, y + h * 0.12);
+            pb.line_to(x + w * 0.82, y + h * 0.32);
+            pb.line_to(x + w * 0.82, y + h * 0.88);
+            pb.line_to(x + w * 0.20, y + h * 0.88);
+            pb.close();
+            // Dog-ear crease
+            pb.move_to(x + w * 0.62, y + h * 0.12);
+            pb.line_to(x + w * 0.62, y + h * 0.32);
+            pb.line_to(x + w * 0.82, y + h * 0.32);
+            // Document text lines
+            pb.move_to(x + w * 0.32, y + h * 0.48);
+            pb.line_to(x + w * 0.70, y + h * 0.48);
+            pb.move_to(x + w * 0.32, y + h * 0.64);
+            pb.line_to(x + w * 0.70, y + h * 0.64);
+            pb.move_to(x + w * 0.32, y + h * 0.76);
+            pb.line_to(x + w * 0.56, y + h * 0.76);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw * 0.9, palette.accent, mask);
+            }
+        }
+        "tools-symbolic" | "preferences-other-symbolic" => {
+            let mut pb = PathBuilder::new();
+            // Diagonal wrench shaft (bottom-left to top-right) + open jaw
+            pb.move_to(x + w * 0.18, y + h * 0.82);
+            pb.line_to(x + w * 0.68, y + h * 0.32);
+            pb.move_to(x + w * 0.60, y + h * 0.20);
+            pb.quad_to(x + w * 0.84, y + h * 0.16, x + w * 0.80, y + h * 0.40);
+            // Crossed screwdriver shaft (top-left to bottom-right) + handle
+            pb.move_to(x + w * 0.20, y + h * 0.20);
+            pb.line_to(x + w * 0.82, y + h * 0.82);
+            pb.move_to(x + w * 0.14, y + h * 0.26);
+            pb.line_to(x + w * 0.26, y + h * 0.14);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "dialog-warning-symbolic" | "dialog-error-symbolic" => {
+            let mut pb = PathBuilder::new();
+            // Warning triangle outline
+            pb.move_to(cx, y + h * 0.12);
+            pb.line_to(x + w * 0.88, y + h * 0.84);
+            pb.line_to(x + w * 0.12, y + h * 0.84);
+            pb.close();
+            // Exclamation mark stem + bottom dot
+            pb.move_to(cx, y + h * 0.38);
+            pb.line_to(cx, y + h * 0.62);
+            push_circle_subpath(&mut pb, cx, y + h * 0.74, sw * 0.55);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw * 0.95, palette.accent, mask);
+            }
+        }
+        "lab-symbolic" | "applications-science-symbolic" => {
+            // Erlenmeyer flask matching Feature Request icon in rFerramLayout-PNG.drawio.png
+            let mut pb = PathBuilder::new();
+            // Top rim
+            pb.move_to(cx - w * 0.16, y + h * 0.14);
+            pb.line_to(cx + w * 0.16, y + h * 0.14);
+            // Neck & conical body
+            pb.move_to(cx - w * 0.10, y + h * 0.14);
+            pb.line_to(cx - w * 0.10, y + h * 0.38);
+            pb.line_to(x + w * 0.16, y + h * 0.86);
+            pb.line_to(x + w * 0.84, y + h * 0.86);
+            pb.line_to(cx + w * 0.10, y + h * 0.38);
+            pb.line_to(cx + w * 0.10, y + h * 0.14);
+            // Liquid level line inside flask
+            pb.move_to(x + w * 0.28, y + h * 0.66);
+            pb.line_to(x + w * 0.72, y + h * 0.66);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw * 0.95, palette.accent, mask);
+            }
+        }
+        "view-more-symbolic" | "view-more-horizontal-symbolic" => {
+            let dot_r = (s * 0.085).max(sw * 0.5);
+            let mut pb = PathBuilder::new();
+            for dx in [-w * 0.28, 0.0, w * 0.28] {
+                push_circle_subpath(&mut pb, cx + dx, cy, dot_r);
+            }
+            if let Some(path) = pb.finish() {
+                fill_vector_path(pixmap, &path, palette.accent, mask);
+                stroke_vector_path(pixmap, &path, sw * 0.6, palette.accent, mask);
+            }
+        }
+        "avatar-default-symbolic" | "system-users-symbolic" | "user-symbolic" => {
+            let mut pb = PathBuilder::new();
+            push_circle_subpath(&mut pb, cx, y + h * 0.32, s * 0.18);
+            pb.move_to(x + w * 0.20, y + h * 0.84);
+            pb.quad_to(cx, y + h * 0.54, x + w * 0.80, y + h * 0.84);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        "window-close-symbolic" => {
+            let arm = s * 0.30;
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx - arm, cy - arm);
+            pb.line_to(cx + arm, cy + arm);
+            pb.move_to(cx + arm, cy - arm);
+            pb.line_to(cx - arm, cy + arm);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
+        _ => {
+            // Deterministic vector diamond + hash-varied radial spokes for any custom symbolic icon name
+            let mut hash = 2166136261u32;
+            for b in name.bytes() {
+                hash = (hash ^ u32::from(b)).wrapping_mul(16777619);
+            }
+            let r = s * 0.38;
+            let mut pb = PathBuilder::new();
+            pb.move_to(cx, cy - r);
+            pb.line_to(cx + r, cy);
+            pb.line_to(cx, cy + r);
+            pb.line_to(cx - r, cy);
+            pb.close();
+            let angle = ((hash % 360) as f32).to_radians();
+            pb.move_to(cx - angle.cos() * r * 0.6, cy - angle.sin() * r * 0.6);
+            pb.line_to(cx + angle.cos() * r * 0.6, cy + angle.sin() * r * 0.6);
+            if let Some(path) = pb.finish() {
+                stroke_vector_path(pixmap, &path, sw, palette.accent, mask);
+            }
+        }
     }
 }
 
@@ -1688,5 +2712,328 @@ mod tests {
         // Because the first modal TextInput ("10.42.0.10:4433") is auto-focused rather than the
         // trailing empty TextInput, changing caret_position from 0 to 8 moves the rendered caret bar.
         assert_ne!(px_0.data(), px_8.data());
+    }
+
+    #[test]
+    fn test_all_symbolic_icons_render_distinct_vector_pixels() {
+        assert!(
+            SYMBOLIC_ICON_NAMES.len() >= 19,
+            "expected at least 19 symbolic icon names in SYMBOLIC_ICON_NAMES"
+        );
+
+        let theme = Theme::dark();
+        let palette = ThemePalette::from_theme(&theme);
+        let bg = to_skia_color(palette.window_bg);
+
+        let mut rendered_icons: Vec<(&str, Vec<u8>)> =
+            Vec::with_capacity(SYMBOLIC_ICON_NAMES.len());
+
+        for &icon_name in SYMBOLIC_ICON_NAMES {
+            // Also verify icon::from_name builder produces the expected Icon WidgetNode
+            let elem: Element<'_, RasterTestMsg> = icon::from_name(icon_name).size(24).into();
+            let px = elem.rasterize(32, 32, &theme);
+            assert_eq!(px.width(), 32);
+            assert_eq!(px.height(), 32);
+
+            let mut baseline = Pixmap::new(32, 32).unwrap();
+            baseline.fill(bg);
+            assert_ne!(
+                px.data(),
+                baseline.data(),
+                "symbolic icon {icon_name:?} must paint non-background vector pixels"
+            );
+
+            for (prev_name, prev_data) in &rendered_icons {
+                assert_ne!(
+                    px.data(),
+                    prev_data.as_slice(),
+                    "symbolic icon {icon_name:?} must render distinct vector pixels from {prev_name:?}"
+                );
+            }
+            rendered_icons.push((icon_name, px.data().to_vec()));
+
+            // Verify sub-16px layout sizing (12x12) and sub-6px (4x4) bounds containment
+            let small_elem: Element<'_, RasterTestMsg> = icon::from_name(icon_name).size(12).into();
+            let small_boxes = small_elem.layout(64.0, 64.0);
+            assert_eq!(small_boxes.len(), 1);
+            assert_eq!((small_boxes[0].width, small_boxes[0].height), (12.0, 12.0));
+
+            if !icon_name.contains("rFerram") {
+                let mut tiny_canvas = Pixmap::new(24, 24).unwrap();
+                tiny_canvas.fill(bg);
+                paint_icon(
+                    &mut tiny_canvas,
+                    Rect::new(10.0, 10.0, 4.0, 4.0),
+                    icon_name,
+                    4,
+                    &palette,
+                    None,
+                );
+                // Pixels outside the 4x4 target region (with 1px anti-aliasing margin: 9..15) must remain untouched
+                for y in 0..24u32 {
+                    for x in 0..24u32 {
+                        if !(9..15).contains(&x) || !(9..15).contains(&y) {
+                            let p = tiny_canvas.pixel(x, y).unwrap();
+                            assert_eq!(
+                                (p.red(), p.green(), p.blue()),
+                                (
+                                    palette.window_bg[0],
+                                    palette.window_bg[1],
+                                    palette.window_bg[2]
+                                ),
+                                "sub-6px icon {icon_name:?} overflowed at ({x}, {y})"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_button_styles_and_checkbox_toggler_rendering() {
+        use crate::widget::{
+            ButtonStyle, TogglerStyle, checkbox, icon_button, menu_button, nav_button,
+            segmented_button,
+        };
+
+        let theme = Theme::dark();
+        let palette = ThemePalette::from_theme(&theme);
+
+        // 1. Verify each ButtonStyle renders pairwise distinct pixels for the same label & icon
+        let styles = [
+            ButtonStyle::Standard,
+            ButtonStyle::Primary,
+            ButtonStyle::Icon,
+            ButtonStyle::Segmented,
+            ButtonStyle::NavRow,
+            ButtonStyle::CardTrigger,
+            ButtonStyle::MenuItem,
+        ];
+        let mut rendered_styles: Vec<(ButtonStyle, Vec<u8>)> = Vec::with_capacity(styles.len());
+        for style in styles {
+            let elem: Element<'_, RasterTestMsg> = button("Action")
+                .style(style)
+                .icon("preferences-system-symbolic")
+                .on_press(RasterTestMsg::Action)
+                .into();
+            let px = elem.rasterize(160, 44, &theme);
+            assert_eq!(px.width(), 160);
+            assert_eq!(px.height(), 44);
+            for (prev_style, prev_data) in &rendered_styles {
+                assert_ne!(
+                    px.data(),
+                    prev_data.as_slice(),
+                    "ButtonStyle::{style:?} must render distinctly from ButtonStyle::{prev_style:?}"
+                );
+            }
+            rendered_styles.push((style, px.data().to_vec()));
+        }
+
+        // Verify active icon buttons and primary buttons paint contrasted (text_on_accent) icon strokes
+        let active_add_btn: Element<'_, RasterTestMsg> = icon_button("add-symbolic")
+            .active(true)
+            .on_press(RasterTestMsg::Action)
+            .into();
+        let active_add_px = active_add_btn.rasterize(40, 40, &theme);
+        let has_contrasted_icon_pixel = active_add_px.pixels().iter().any(|px| {
+            px.red() == palette.text_on_accent[0]
+                && px.green() == palette.text_on_accent[1]
+                && px.blue() == palette.text_on_accent[2]
+        });
+        assert!(
+            has_contrasted_icon_pixel,
+            "active Icon button must paint symbolic icon in text_on_accent color over accent fill"
+        );
+
+        // Verify icon-only segmented/primary buttons stay compact in layout
+        let seg_icon_only: Element<'_, RasterTestMsg> = icon_button("view-grid-symbolic")
+            .style(ButtonStyle::Segmented)
+            .into();
+        let seg_boxes = seg_icon_only.layout(200.0, 44.0);
+        assert_eq!(seg_boxes[0].width, 36.0);
+
+        // 2. Verify icon_button, nav_button, segmented_button, and menu_button builders + collect_text
+        let ic_btn: Element<'_, RasterTestMsg> = icon_button("add-symbolic")
+            .label("+")
+            .on_press(RasterTestMsg::Action)
+            .into();
+        assert_eq!(
+            ic_btn.collect_text(),
+            vec!["+".to_string(), "add-symbolic".to_string()]
+        );
+
+        let nav_btn: Element<'_, RasterTestMsg> = nav_button("Favorites")
+            .icon("emblem-favorite-symbolic")
+            .active(true)
+            .on_press(RasterTestMsg::Action)
+            .into();
+        assert_eq!(
+            nav_btn.collect_text(),
+            vec![
+                "Favorites".to_string(),
+                "emblem-favorite-symbolic".to_string()
+            ]
+        );
+
+        let seg_btn: Element<'_, RasterTestMsg> = segmented_button("General")
+            .selected(true)
+            .on_press(RasterTestMsg::Action)
+            .into();
+        let menu_btn: Element<'_, RasterTestMsg> = menu_button("Connect")
+            .icon("object-select-symbolic")
+            .on_press(RasterTestMsg::Action)
+            .into();
+
+        for el in [ic_btn, nav_btn, seg_btn, menu_btn] {
+            let px = el.rasterize(180, 44, &theme);
+            assert_eq!(px.width(), 180);
+            assert_eq!(px.height(), 44);
+        }
+
+        // 3. Verify TogglerStyle::Checkbox vs TogglerStyle::Switch and checked vs unchecked
+        let chk_unchecked: Element<'_, RasterTestMsg> = checkbox(
+            "Reconnect if the session is dropped",
+            false,
+            RasterTestMsg::Toggle(true),
+        );
+        let chk_checked: Element<'_, RasterTestMsg> = checkbox(
+            "Reconnect if the session is dropped",
+            true,
+            RasterTestMsg::Toggle(false),
+        );
+        let sw_checked: Element<'_, RasterTestMsg> = toggler(
+            "Reconnect if the session is dropped",
+            true,
+            RasterTestMsg::Toggle(false),
+        );
+
+        assert!(matches!(
+            chk_checked.node,
+            WidgetNode::Toggler {
+                style: TogglerStyle::Checkbox,
+                is_checked: true,
+                ..
+            }
+        ));
+        assert!(matches!(
+            sw_checked.node,
+            WidgetNode::Toggler {
+                style: TogglerStyle::Switch,
+                is_checked: true,
+                ..
+            }
+        ));
+
+        let px_chk_off = chk_unchecked.rasterize(320, 36, &theme);
+        let px_chk_on = chk_checked.rasterize(320, 36, &theme);
+        let px_sw_on = sw_checked.rasterize(320, 36, &theme);
+        assert_ne!(
+            px_chk_off.data(),
+            px_chk_on.data(),
+            "checked checkbox must paint accent fill and checkmark distinct from unchecked checkbox"
+        );
+        assert_ne!(
+            px_chk_on.data(),
+            px_sw_on.data(),
+            "TogglerStyle::Checkbox must render distinctly from TogglerStyle::Switch"
+        );
+    }
+
+    #[test]
+    fn test_mockup_container_classes_and_card_sheen_rasterization() {
+        let dark_theme = Theme::dark();
+        let light_theme = Theme::light();
+        let dark_palette = ThemePalette::from_theme(&dark_theme);
+        let bg = to_skia_color(dark_palette.window_bg);
+
+        let container_classes = [
+            CLASS_TOP_TABBAR,
+            CLASS_TOOLBAR,
+            CLASS_SEGMENTED_PILL,
+            CLASS_SEARCH_PILL,
+            CLASS_GROUP_BADGE,
+            CLASS_CONNECTION_CARD,
+            CLASS_CONTEXT_MENU,
+            CLASS_ADD_MENU,
+            CLASS_FORM_ROW,
+            CLASS_MODAL_TABS,
+            CLASS_MODAL_TAB_FRAME,
+            CLASS_MODAL_FOOTER,
+            CLASS_DRAWER_NAV,
+            CLASS_DRAWER_CONTENT,
+        ];
+
+        for &class in &container_classes {
+            let elem: Element<'_, RasterTestMsg> = container(class, text("Sample"));
+            let dark_px = elem.rasterize(240, 260, &dark_theme);
+            let light_px = elem.rasterize(240, 260, &light_theme);
+            assert_eq!((dark_px.width(), dark_px.height()), (240, 260));
+            assert_eq!((light_px.width(), light_px.height()), (240, 260));
+            assert_ne!(
+                dark_px.data(),
+                light_px.data(),
+                "container class {class:?} must adapt between dark and light themes"
+            );
+
+            // Also verify direct paint_container paints non-background surface/border pixels
+            let mut canvas = Pixmap::new(220, 240).unwrap();
+            canvas.fill(bg);
+            let mut baseline = Pixmap::new(220, 240).unwrap();
+            baseline.fill(bg);
+
+            paint_container(
+                &mut canvas,
+                Rect::new(10.0, 10.0, 200.0, 220.0),
+                class,
+                &dark_theme,
+                &dark_palette,
+                None,
+            );
+            assert_ne!(
+                canvas.data(),
+                baseline.data(),
+                "paint_container for {class:?} must paint visible vector pixels"
+            );
+        }
+
+        // Verify portrait connection card upper preview sheen makes upper-half interior pixels
+        // brighter than lower-half interior card_bg pixels in Dark Theme
+        let mut card_canvas = Pixmap::new(220, 260).unwrap();
+        card_canvas.fill(bg);
+        paint_container(
+            &mut card_canvas,
+            Rect::new(10.0, 10.0, 200.0, 240.0),
+            CLASS_CONNECTION_CARD,
+            &dark_theme,
+            &dark_palette,
+            None,
+        );
+        let upper_px = card_canvas
+            .pixel(110, 50)
+            .expect("upper preview sheen pixel");
+        let lower_px = card_canvas.pixel(110, 200).expect("lower card body pixel");
+        assert!(
+            upper_px.red() > lower_px.red()
+                && upper_px.green() > lower_px.green()
+                && upper_px.blue() > lower_px.blue(),
+            "portrait connection card upper preview sheen {:?} must be brighter than lower card body {:?}",
+            (upper_px.red(), upper_px.green(), upper_px.blue()),
+            (lower_px.red(), lower_px.green(), lower_px.blue())
+        );
+
+        // Edge case: tiny 4x4 container bounds must not panic on any container class
+        let mut tiny_canvas = Pixmap::new(16, 16).unwrap();
+        tiny_canvas.fill(bg);
+        for &class in &container_classes {
+            paint_container(
+                &mut tiny_canvas,
+                Rect::new(2.0, 2.0, 4.0, 4.0),
+                class,
+                &dark_theme,
+                &dark_palette,
+                None,
+            );
+        }
     }
 }
